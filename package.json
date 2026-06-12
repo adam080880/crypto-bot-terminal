@@ -1,0 +1,23 @@
+{
+  "name": "trading",
+  "module": "src/index.ts",
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "start:eth": "bun run src/index.ts ETHUSDT",
+    "typecheck": "tsc --noEmit"
+  },
+  "type": "module",
+  "private": true,
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/react": "^19.2.17"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "@types/node": "^25.9.3",
+    "ink": "^7.0.5",
+    "react": "^19.2.7"
+  }
+}
