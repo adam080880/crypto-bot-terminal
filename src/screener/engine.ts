@@ -9,10 +9,10 @@ import { calcATR } from "../ict/atr.ts";
 import { obToPOI, fvgToPOI, buildPOIStacks } from "../ict/poi.ts";
 import { detectSetups } from "../ict/setupDetector.ts";
 import { getKillZone } from "../ict/killzone.ts";
-import { fetchTopSymbols, DEFAULT_SYMBOLS } from "./symbols.ts";
+import { fetchAllCryptoPerps, DEFAULT_SYMBOLS } from "./symbols.ts";
 
 const BATCH_SIZE = 5;
-const BATCH_DELAY_MS = 600;
+const BATCH_DELAY_MS = 1200; // 5 symbols × 4 klines × weight 2 = 40 weight/batch → ~2000 weight/min (safe under 2400 limit)
 const SCAN_INTERVAL_MS = 5 * 60_000;
 
 type KlineRow = [number, string, string, string, string, string, number, ...unknown[]];
@@ -72,6 +72,22 @@ export class ScreenerEngine extends EventEmitter {
     };
   }
 
+  /**
+   * Returns the top N symbol names ranked by best setup confidence.
+   * Used by BotPool to decide which symbols deserve a live ICT engine.
+   */
+  getTopCandidates(n: number): { symbol: string; rank: number }[] {
+    return [...this.results.values()]
+      .filter((r) => !r.error && r.htfTrend !== "ranging" && r.setups.length > 0)
+      .sort((a, b) => {
+        const ac = a.setups[0]?.confidence ?? 0;
+        const bc = b.setups[0]?.confidence ?? 0;
+        return bc - ac;
+      })
+      .slice(0, n)
+      .map((r, i) => ({ symbol: r.symbol, rank: i + 1 }));
+  }
+
   private async runScan(): Promise<void> {
     if (this.scanning) return;
     this.scanning = true;
@@ -80,7 +96,7 @@ export class ScreenerEngine extends EventEmitter {
 
     let symbols: string[];
     try {
-      symbols = await fetchTopSymbols(30);
+      symbols = await fetchAllCryptoPerps();
     } catch {
       symbols = [...DEFAULT_SYMBOLS];
     }

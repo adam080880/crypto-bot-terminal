@@ -13,6 +13,7 @@ export function StatusBar({ depth, tickSize }: Props) {
       <Text color="gray" dimColor>[<Text color="white">+/-</Text>] depth:<Text color="cyan"> {depth}</Text></Text>
       <Text color="gray" dimColor>[<Text color="white">[]</Text>] tick:<Text color="cyan"> {fmtTick}</Text></Text>
       <Text color="gray" dimColor>[<Text color="white">Tab</Text>] view</Text>
+      <Text color="gray" dimColor>[<Text color="white">/</Text>] symbol</Text>
       <Text color="gray" dimColor>[<Text color="white">q</Text>] quit</Text>
     </Box>
   );

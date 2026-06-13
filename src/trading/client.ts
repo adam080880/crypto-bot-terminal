@@ -76,6 +76,23 @@ export class BinanceFuturesClient {
     return this.request<BinanceOrder[]>("GET", "/fapi/v1/openOrders", { symbol });
   }
 
+  // Returns the most recent realized-PnL timestamp per symbol since `since` (epoch ms).
+  async getRecentTradeTimestamps(since: number): Promise<Map<string, number>> {
+    type IncomeRecord = { symbol: string; incomeType: string; time: number };
+    const records = await this.request<IncomeRecord[]>("GET", "/fapi/v1/income", {
+      incomeType: "REALIZED_PNL",
+      startTime: since,
+      limit: 1000,
+    });
+    const latest = new Map<string, number>();
+    for (const r of records) {
+      if (!r.symbol) continue;
+      const prev = latest.get(r.symbol) ?? 0;
+      if (r.time > prev) latest.set(r.symbol, r.time);
+    }
+    return latest;
+  }
+
   async placeMarketOrder(
     symbol: string,
     side: "BUY" | "SELL",
@@ -96,19 +113,25 @@ export class BinanceFuturesClient {
     side: "BUY" | "SELL",
     qty: number,
     stopPrice: number,
-  ): Promise<BinanceOrder> {
-    const filters = await this.getSymbolFilters(symbol);
-    const qtyStr = roundStep(qty, filters.stepSize);
+  ): Promise<{ orderId: number; isAlgo: boolean }> {
+    const filters  = await this.getSymbolFilters(symbol);
+    const qtyStr   = roundStep(qty, filters.stepSize);
     const priceStr = roundStep(stopPrice, filters.tickSize);
-    return this.request<BinanceOrder>("POST", "/fapi/v1/order", {
-      symbol,
-      side,
-      type: "STOP_MARKET",
-      quantity: qtyStr,
-      stopPrice: priceStr,
-      reduceOnly: "true",
-      workingType: "MARK_PRICE",
-    });
+    try {
+      const order = await this.request<BinanceOrder>("POST", "/fapi/v1/order", {
+        symbol, side,
+        type: "STOP_MARKET",
+        quantity: qtyStr,
+        stopPrice: priceStr,
+        reduceOnly: "true",
+        workingType: "MARK_PRICE",
+      });
+      return { orderId: order.orderId, isAlgo: false };
+    } catch (err) {
+      if (!isAlgoOrderError(err)) throw err;
+      const algoId = await this.placeAlgoConditional(symbol, side, "STOP_MARKET", qtyStr, priceStr);
+      return { orderId: algoId, isAlgo: true };
+    }
   }
 
   async placeTakeProfit(
@@ -116,27 +139,72 @@ export class BinanceFuturesClient {
     side: "BUY" | "SELL",
     qty: number,
     stopPrice: number,
-  ): Promise<BinanceOrder> {
-    const filters = await this.getSymbolFilters(symbol);
-    const qtyStr = roundStep(qty, filters.stepSize);
+  ): Promise<{ orderId: number; isAlgo: boolean }> {
+    const filters  = await this.getSymbolFilters(symbol);
+    const qtyStr   = roundStep(qty, filters.stepSize);
     const priceStr = roundStep(stopPrice, filters.tickSize);
-    return this.request<BinanceOrder>("POST", "/fapi/v1/order", {
-      symbol,
-      side,
-      type: "TAKE_PROFIT_MARKET",
+    try {
+      const order = await this.request<BinanceOrder>("POST", "/fapi/v1/order", {
+        symbol, side,
+        type: "TAKE_PROFIT_MARKET",
+        quantity: qtyStr,
+        stopPrice: priceStr,
+        reduceOnly: "true",
+        workingType: "MARK_PRICE",
+      });
+      return { orderId: order.orderId, isAlgo: false };
+    } catch (err) {
+      if (!isAlgoOrderError(err)) throw err;
+      const algoId = await this.placeAlgoConditional(symbol, side, "TAKE_PROFIT_MARKET", qtyStr, priceStr);
+      return { orderId: algoId, isAlgo: true };
+    }
+  }
+
+  private async placeAlgoConditional(
+    symbol: string,
+    side: "BUY" | "SELL",
+    type: "STOP_MARKET" | "TAKE_PROFIT_MARKET",
+    qtyStr: string,
+    triggerPriceStr: string,
+  ): Promise<number> {
+    const resp = await this.request<{ algoId: number }>("POST", "/fapi/v1/algoOrder", {
+      algoType: "CONDITIONAL",
+      symbol, side, type,
       quantity: qtyStr,
-      stopPrice: priceStr,
+      triggerPrice: triggerPriceStr,
       reduceOnly: "true",
       workingType: "MARK_PRICE",
     });
+    return resp.algoId;
   }
 
   async cancelOrder(symbol: string, orderId: number): Promise<void> {
     await this.request("DELETE", "/fapi/v1/order", { symbol, orderId });
   }
 
+  async cancelAlgoOrder(symbol: string, algoId: number): Promise<void> {
+    await this.request("DELETE", "/fapi/v1/algoOrder", { symbol, algoId });
+  }
+
+  async getMaxLeverage(symbol: string): Promise<number> {
+    type Resp = { symbol: string; brackets: { initialLeverage: number }[] }[];
+    try {
+      const data = await this.request<Resp>("GET", "/fapi/v1/leverageBracket", { symbol });
+      return data.find((d) => d.symbol === symbol)?.brackets[0]?.initialLeverage ?? 20;
+    } catch {
+      return 20; // safe fallback if endpoint fails
+    }
+  }
+
   async setLeverage(symbol: string, leverage: number): Promise<void> {
     await this.request("POST", "/fapi/v1/leverage", { symbol, leverage });
+  }
+
+  // Sets the maximum allowed leverage for the symbol and returns the value used.
+  async setMaxLeverage(symbol: string): Promise<number> {
+    const max = await this.getMaxLeverage(symbol);
+    await this.setLeverage(symbol, max);
+    return max;
   }
 
   async getSymbolFilters(symbol: string): Promise<SymbolFilters> {
@@ -168,4 +236,9 @@ function roundStep(value: number, step: number): string {
   const decimals = step.toString().split(".")[1]?.length ?? 0;
   const rounded = Math.floor(value / step) * step;
   return rounded.toFixed(decimals);
+}
+
+function isAlgoOrderError(err: unknown): boolean {
+  const msg = (err as Error).message ?? "";
+  return msg.includes("Order type not supported") || msg.includes("Algo Order");
 }

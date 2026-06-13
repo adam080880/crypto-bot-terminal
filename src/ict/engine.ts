@@ -74,6 +74,9 @@ export class ICTEngine extends EventEmitter {
   start(symbol: string): void {
     this.symbol = symbol;
     this.snapshot = { ...this.emptySnapshot(), symbol };
+    this.activeSetups.clear();
+    this.poiCache.clear();
+    this.atrEntry = 0;
 
     Promise.all(
       ALL_TFS.map((tf) => this.fetchers[tf].start(symbol).catch(() => {})),

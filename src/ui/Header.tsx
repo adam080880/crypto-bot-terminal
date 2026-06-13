@@ -13,6 +13,8 @@ interface Props {
   price?: number;
   cols: number;
   hasBotLive?: boolean;
+  inputMode?: boolean;
+  inputBuffer?: string;
 }
 
 function statusDot(status: CrawlerStatus): { char: string; color: string } {
@@ -39,7 +41,7 @@ const VIEW_LABELS: Record<ActiveView, string> = {
   bot: "BOT",
 };
 
-export function Header({ symbol, statuses, lastUpdate, activeView, price, cols, hasBotLive }: Props) {
+export function Header({ symbol, statuses, lastUpdate, activeView, price, cols, hasBotLive, inputMode, inputBuffer }: Props) {
   const timeStr = lastUpdate.toLocaleTimeString("en-US", { hour12: false });
   const sep = <Text color="gray"> │ </Text>;
 
@@ -49,30 +51,44 @@ export function Header({ symbol, statuses, lastUpdate, activeView, price, cols, 
   return (
     <Box flexDirection="column" width={cols}>
       <Box paddingX={1} justifyContent="space-between">
-        {/* Left: symbol + price + exchanges */}
+        {/* Left: symbol input prompt OR normal symbol+price display */}
         <Box gap={0} alignItems="center">
-          <Text bold color="cyanBright">{symbol.replace("USDT", "").replace("USD", "")}</Text>
-          <Text color="gray">/USDT</Text>
-          {sep}
-          {price !== undefined ? (
-            <Text color="white" bold>${fmtPrice(price)}</Text>
-          ) : (
-            <Text color="gray" dimColor>loading…</Text>
-          )}
-          {sep}
-          <Box gap={1}>
-            {EXCHANGES.map((ex) => {
-              const dot = statusDot(statuses[ex]);
-              return <Text key={ex} color={dot.color}>{dot.char}</Text>;
-            })}
-            <Text color={connectedCount === totalCount ? "green" : connectedCount > 0 ? "yellow" : "red"}>
-              {connectedCount}/{totalCount}
-            </Text>
-          </Box>
-          {hasBotLive && (
+          {inputMode ? (
             <>
+              <Text color="yellow" bold>/ </Text>
+              <Text color="white" bold>{inputBuffer || ""}</Text>
+              <Text color="yellow">_</Text>
               {sep}
-              <Text color="greenBright" bold>⚡ BOT LIVE</Text>
+              <Text color="gray" dimColor>
+                e.g. BTCUSDT — Enter to confirm, Esc to cancel
+              </Text>
+            </>
+          ) : (
+            <>
+              <Text bold color="cyanBright">{symbol.replace("USDT", "").replace("USD", "")}</Text>
+              <Text color="gray">/USDT</Text>
+              {sep}
+              {price !== undefined ? (
+                <Text color="white" bold>${fmtPrice(price)}</Text>
+              ) : (
+                <Text color="gray" dimColor>loading…</Text>
+              )}
+              {sep}
+              <Box gap={1}>
+                {EXCHANGES.map((ex) => {
+                  const dot = statusDot(statuses[ex]);
+                  return <Text key={ex} color={dot.color}>{dot.char}</Text>;
+                })}
+                <Text color={connectedCount === totalCount ? "green" : connectedCount > 0 ? "yellow" : "red"}>
+                  {connectedCount}/{totalCount}
+                </Text>
+              </Box>
+              {hasBotLive && (
+                <>
+                  {sep}
+                  <Text color="greenBright" bold>⚡ BOT LIVE</Text>
+                </>
+              )}
             </>
           )}
         </Box>

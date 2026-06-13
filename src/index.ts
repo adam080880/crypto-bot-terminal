@@ -1,5 +1,6 @@
 import React from "react";
 import { render } from "ink";
+import { emitKeypressEvents } from "readline";
 import { BinanceCrawler } from "./crawlers/binance.ts";
 import { BybitCrawler } from "./crawlers/bybit.ts";
 import { OkxCrawler } from "./crawlers/okx.ts";
@@ -12,6 +13,7 @@ import { SentimentAggregator } from "./sentiment/aggregator.ts";
 import { ICTEngine } from "./ict/engine.ts";
 import { ScreenerEngine } from "./screener/engine.ts";
 import { BinanceFuturesClient } from "./trading/client.ts";
+import { BotPool } from "./trading/botPool.ts";
 import { TradingBot } from "./trading/bot.ts";
 import { promptCredentials, promptBotConfig } from "./trading/prompt.ts";
 import { App } from "./ui/App.tsx";
@@ -38,6 +40,7 @@ const screenerEngine = new ScreenerEngine();
 
 // ─── Optional: prompt credentials + set up bot ─────────────────────────────
 let tradingBot: TradingBot | undefined;
+let botPool: BotPool | undefined;
 
 if (!noBot) {
   const creds = await promptCredentials();
@@ -55,13 +58,42 @@ if (!noBot) {
   const botConfig = await promptBotConfig();
   process.stdout.write("\n");
 
-  tradingBot = new TradingBot(ictEngine, client, { symbol, ...botConfig });
+  botPool    = new BotPool(screenerEngine, symbol);
+  tradingBot = new TradingBot(botPool, client, botConfig);
 }
+
+// ─── Keyboard input setup ────────────────────────────────────────────────────
+// emitKeypressEvents makes readline parse raw bytes into structured key objects
+// (name, shift, ctrl, etc.) so our 'keypress' listener in App.tsx works.
+// setRawMode sends individual keystrokes immediately instead of line-buffered.
+emitKeypressEvents(process.stdin);
+if (process.stdin.setRawMode) {
+  try { process.stdin.setRawMode(true); } catch {}
+}
+process.stdin.resume();
 
 // ─── Enter fullscreen alternate screen ─────────────────────────────────────
 if (process.stdout.isTTY) {
   process.stdout.write("\x1b[?1049h"); // enter alternate screen
   process.stdout.write("\x1b[H");      // cursor to top-left
+}
+
+// ─── Symbol switch — restarts per-symbol engines, leaves global ones alone ──
+function changeSymbol(newSymbol: string): void {
+  // Stop per-symbol engines
+  for (const crawler of crawlers) crawler.disconnect();
+  sentimentAggregator.stop();
+  ictEngine.stop();
+
+  // Restart with new symbol
+  for (const crawler of crawlers) {
+    crawler.connect(newSymbol).catch((err: Error) => {
+      console.error(`[${crawler.exchange}] reconnect error:`, err.message);
+    });
+  }
+  sentimentAggregator.start(newSymbol);
+  ictEngine.start(newSymbol);
+  // screenerEngine and botPool/tradingBot are global — intentionally not restarted
 }
 
 // ─── Render UI ─────────────────────────────────────────────────────────────
@@ -73,6 +105,7 @@ const { unmount } = render(
     screenerEngine,
     tradingBot,
     symbol,
+    onSymbolChange: changeSymbol,
   }),
   { exitOnCtrlC: false }
 );
@@ -100,6 +133,7 @@ if (tradingBot) {
 // ─── Shutdown ───────────────────────────────────────────────────────────────
 function shutdown() {
   tradingBot?.stop();
+  botPool?.stop();
   for (const crawler of crawlers) crawler.disconnect();
   sentimentAggregator.stop();
   ictEngine.stop();

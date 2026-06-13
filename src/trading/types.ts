@@ -62,7 +62,21 @@ export interface TradeRecord {
   entryOrderId?: number;
   slOrderId?: number;
   tpOrderId?: number;
+  slIsAlgo?: boolean;
+  tpIsAlgo?: boolean;
   error?: string;
+  reasons?: string[];
+  poiStack?: string;   // compact label e.g. "1d OB → 4h FVG → 15m RBS"
+}
+
+export interface WatchedSymbol {
+  symbol: string;
+  price: number;
+  setupCount: number;
+  topConfidence: number;
+  topSetupType: string;
+  htfTrend: string;
+  screenerRank: number; // 1-based rank from screener
 }
 
 export interface BotSnapshot {
@@ -71,4 +85,5 @@ export interface BotSnapshot {
   trades: TradeRecord[];
   lastError: string | null;
   lastUpdated: number;
+  watchedSymbols: WatchedSymbol[];
 }

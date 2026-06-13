@@ -1,6 +1,6 @@
 import React from "react";
 import { Box, Text } from "ink";
-import type { BotSnapshot, TradeRecord } from "../trading/types.ts";
+import type { BotSnapshot, TradeRecord, WatchedSymbol } from "../trading/types.ts";
 import type { ICTSnapshot, ICTSetup } from "../ict/types.ts";
 
 interface Props {
@@ -98,6 +98,42 @@ function AccountHeader({ snapshot }: { snapshot: BotSnapshot }) {
   );
 }
 
+// ── Watched symbols (screener pool) ──────────────────────────────────────────
+
+function trendGlyph(trend: string) {
+  return trend === "bullish" ? "▲" : trend === "bearish" ? "▼" : "─";
+}
+function trendColor(trend: string) {
+  return trend === "bullish" ? "green" : trend === "bearish" ? "red" : "gray";
+}
+
+function WatchedSymbolsSection({ symbols }: { symbols: WatchedSymbol[] }) {
+  if (symbols.length === 0) return null;
+  return (
+    <Box flexDirection="column" marginBottom={1}>
+      <Text color="gray" bold>Watching ({symbols.length} symbols)</Text>
+      <Box flexWrap="wrap" gap={1} marginLeft={1}>
+        {symbols.map((s) => {
+          const hasSetup = s.setupCount > 0;
+          const tc = trendColor(s.htfTrend);
+          return (
+            <Box key={s.symbol} gap={1} borderStyle="single" borderColor={hasSetup ? "cyan" : "gray"} paddingX={1}>
+              <Text color="white" bold>{s.symbol.replace("USDT", "")}</Text>
+              <Text color={tc}>{trendGlyph(s.htfTrend)}</Text>
+              <Text color="gray">{fmtPrice(s.price)}</Text>
+              {hasSetup ? (
+                <Text color="cyan">{s.topSetupType} {s.topConfidence}%</Text>
+              ) : (
+                <Text color="gray" dimColor>no setup</Text>
+              )}
+            </Box>
+          );
+        })}
+      </Box>
+    </Box>
+  );
+}
+
 // ── Active Setups from ICT engine ─────────────────────────────────────────────
 
 function SetupRow({ setup }: { setup: ICTSetup }) {
@@ -137,13 +173,18 @@ function SetupRow({ setup }: { setup: ICTSetup }) {
   );
 }
 
-function ActiveSetupsSection({ setups }: { setups: ICTSetup[] }) {
+function ActiveSetupsSection({ setups, symbol }: { setups: ICTSetup[]; symbol: string }) {
   const active   = setups.filter((s) => s.status === "active" || s.status === "triggered");
   const watching = setups.filter((s) => s.status === "watching").slice(0, 4);
+  const coin     = symbol.replace("USDT", "");
 
   return (
     <Box flexDirection="column" marginBottom={1}>
-      <Text color="gray" bold>Active Setups ({active.length})</Text>
+      <Box gap={1}>
+        <Text color="gray" bold>Active Setups</Text>
+        <Text color="white" bold>{coin}</Text>
+        <Text color="gray" bold>({active.length})</Text>
+      </Box>
       {active.length === 0 ? (
         <Box marginLeft={2}><Text color="gray" dimColor>none at current price</Text></Box>
       ) : (
@@ -151,7 +192,11 @@ function ActiveSetupsSection({ setups }: { setups: ICTSetup[] }) {
       )}
       {watching.length > 0 && (
         <>
-          <Text color="gray" bold>On Watch ({watching.length})</Text>
+          <Box gap={1}>
+            <Text color="gray" bold>On Watch</Text>
+            <Text color="white" bold>{coin}</Text>
+            <Text color="gray" bold>({watching.length})</Text>
+          </Box>
           {watching.map((s) => <SetupRow key={s.id} setup={s} />)}
         </>
       )}
@@ -169,17 +214,30 @@ function PositionRow({ trade }: { trade: TradeRecord }) {
   const rr    = risk > 0 ? `${(Math.abs(trade.takeProfit - trade.entryPrice) / risk).toFixed(1)}x` : "—";
 
   return (
-    <Box gap={2} marginLeft={1}>
-      <Text color={dc} bold>{label}</Text>
-      <Text color="gray">{trade.setupType}</Text>
-      <Text color={confColor(trade.confidence)}>{trade.confidence}%</Text>
-      <Text color="gray">E</Text><Text color="white">{fmtPrice(trade.entryPrice)}</Text>
-      <Text color="gray">SL</Text><Text color="red">{fmtPrice(trade.stopLoss)}</Text>
-      <Text color="gray">TP</Text><Text color="green">{fmtPrice(trade.takeProfit)}</Text>
-      <Text color="gray">qty</Text><Text color="white">{trade.qty}</Text>
-      <Text color="gray">RR</Text><Text color="white">{rr}</Text>
-      <Text color={pnl.color} bold>{pnl.text}</Text>
-      <Text color="gray" dimColor>{fmtAge(trade.openedAt)} ago</Text>
+    <Box flexDirection="column" marginLeft={1} marginBottom={1}>
+      <Box gap={2}>
+        <Text color={dc} bold>{label}</Text>
+        <Text color="white" bold>{trade.symbol.replace("USDT", "")}</Text>
+        <Text color="gray">{trade.setupType}</Text>
+        <Text color={confColor(trade.confidence)}>{trade.confidence}%</Text>
+        <Text color="gray">E</Text><Text color="white">{fmtPrice(trade.entryPrice)}</Text>
+        <Text color="gray">SL</Text><Text color="red">{fmtPrice(trade.stopLoss)}</Text>
+        <Text color="gray">TP</Text><Text color="green">{fmtPrice(trade.takeProfit)}</Text>
+        <Text color="gray">qty</Text><Text color="white">{trade.qty}</Text>
+        <Text color="gray">RR</Text><Text color="white">{rr}</Text>
+        <Text color={pnl.color} bold>{pnl.text}</Text>
+        <Text color="gray" dimColor>{fmtAge(trade.openedAt)} ago</Text>
+      </Box>
+      {trade.poiStack && (
+        <Box marginLeft={2}>
+          <Text color="cyan" dimColor>{trade.poiStack}</Text>
+        </Box>
+      )}
+      {trade.reasons && trade.reasons.length > 0 && (
+        <Box marginLeft={2}>
+          <Text color="gray" dimColor>{trade.reasons.join(" · ")}</Text>
+        </Box>
+      )}
     </Box>
   );
 }
@@ -198,6 +256,7 @@ function HistoryRow({ trade }: { trade: TradeRecord }) {
   return (
     <Box gap={2} marginLeft={1}>
       <Text color={dc}>{label}</Text>
+      <Text color="white" bold>{trade.symbol.replace("USDT", "")}</Text>
       <Text color="gray">{trade.setupType}</Text>
       <Text color="gray">@ {fmtPrice(trade.entryPrice)}</Text>
       <Text color={pnl.color}>{pnl.text}</Text>
@@ -225,8 +284,11 @@ export function BotView({ snapshot, ict }: Props) {
         </Box>
       )}
 
-      {/* ICT setups feed */}
-      <ActiveSetupsSection setups={ict.setups} />
+      {/* Screener pool — symbols currently being watched */}
+      <WatchedSymbolsSection symbols={snapshot.watchedSymbols} />
+
+      {/* ICT setups feed (from the primary engine's current view) */}
+      <ActiveSetupsSection setups={ict.setups} symbol={ict.symbol} />
 
       {/* Bot open positions */}
       <Box flexDirection="column" marginBottom={1}>
