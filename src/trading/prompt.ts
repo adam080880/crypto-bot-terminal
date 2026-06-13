@@ -69,8 +69,16 @@ export async function promptBotConfig(): Promise<{
   rl.close();
 
   // Hard cap at 10% per trade regardless of input
-  const riskPct     = riskStr   ? Math.min(parseFloat(riskStr)   / 100, 0.10) : 0.01;
-  const highRiskPct = hiRiskStr ? Math.min(parseFloat(hiRiskStr) / 100, 0.10) : 0.05;
+  let riskPct     = riskStr   ? Math.min(parseFloat(riskStr)   / 100, 0.10) : 0.01;
+  let highRiskPct = hiRiskStr ? Math.min(parseFloat(hiRiskStr) / 100, 0.10) : 0.05;
+
+  // Prevent accidental reversal: high-conf must be >= normal
+  if (highRiskPct < riskPct) {
+    process.stdout.write(
+      `\n  ⚠  High-conf risk (${(highRiskPct * 100).toFixed(1)}%) < normal risk (${(riskPct * 100).toFixed(1)}%) — values swapped automatically.\n\n`,
+    );
+    [riskPct, highRiskPct] = [highRiskPct, riskPct];
+  }
 
   return {
     riskPct,

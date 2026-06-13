@@ -39,9 +39,10 @@ interface Props {
   tradingBot?: TradingBot;
   symbol: string;
   onSymbolChange: (symbol: string) => void;
+  memLimitMB: number;
 }
 
-export function App({ aggregator, sentimentAggregator, ictEngine, screenerEngine, tradingBot, symbol, onSymbolChange }: Props) {
+export function App({ aggregator, sentimentAggregator, ictEngine, screenerEngine, tradingBot, symbol, onSymbolChange, memLimitMB }: Props) {
   const { exit } = useApp();
   const { stdout } = useStdout();
   const [activeView, setActiveView] = useState<ActiveView>("book");
@@ -58,6 +59,7 @@ export function App({ aggregator, sentimentAggregator, ictEngine, screenerEngine
   const [botSnap, setBotSnap] = useState<BotSnapshot>(EMPTY_BOT_SNAPSHOT);
   const [lastUpdate, setLastUpdate] = useState(new Date());
   const [midPrice, setMidPrice] = useState<number | undefined>(undefined);
+  const [memUsedMB, setMemUsedMB] = useState(() => Math.round(process.memoryUsage().rss / 1_048_576));
   const [scanScroll, setScanScroll] = useState(0);
   const scanScrollRef = useRef(scanScroll);
   useEffect(() => { scanScrollRef.current = scanScroll; }, [scanScroll]);
@@ -111,6 +113,13 @@ export function App({ aggregator, sentimentAggregator, ictEngine, screenerEngine
     setMidPrice(undefined);
     setIct(ictEngine.get());
   }, [currentSymbol, ictEngine]);
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setMemUsedMB(Math.round(process.memoryUsage().rss / 1_048_576));
+    }, 5_000);
+    return () => clearInterval(timer);
+  }, []);
 
   const cols = stdout?.columns ?? 120;
   const rows = stdout?.rows ?? 40;
@@ -222,7 +231,7 @@ export function App({ aggregator, sentimentAggregator, ictEngine, screenerEngine
           <Box marginY={1} flexDirection="column">
             <AggregatedBook book={book} depth={depth} tickSize={tickSize} cols={cols} />
           </Box>
-          <StatusBar depth={depth} tickSize={tickSize} />
+          <StatusBar depth={depth} tickSize={tickSize} memUsedMB={memUsedMB} memLimitMB={memLimitMB} />
         </>
       )}
       {activeView === "sentiment" && <SentimentView snapshot={sentiment} />}

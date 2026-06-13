@@ -22,6 +22,9 @@ const args = process.argv.slice(2);
 const noBot = args.includes("--no-bot");
 const symbol = args.find((a) => !a.startsWith("-")) ?? "BTCUSDT";
 
+const MEM_LIMIT_MB = 10_240; // 10 GB — soft reset triggers when RSS exceeds this
+let currentSymbol = symbol;
+
 // ─── Core engines (declared first so bot can reference ictEngine) ───────────
 const crawlers = [
   new BinanceCrawler(),
@@ -80,12 +83,12 @@ if (process.stdout.isTTY) {
 
 // ─── Symbol switch — restarts per-symbol engines, leaves global ones alone ──
 function changeSymbol(newSymbol: string): void {
-  // Stop per-symbol engines
+  currentSymbol = newSymbol;
+
   for (const crawler of crawlers) crawler.disconnect();
   sentimentAggregator.stop();
   ictEngine.stop();
 
-  // Restart with new symbol
   for (const crawler of crawlers) {
     crawler.connect(newSymbol).catch((err: Error) => {
       console.error(`[${crawler.exchange}] reconnect error:`, err.message);
@@ -95,6 +98,36 @@ function changeSymbol(newSymbol: string): void {
   ictEngine.start(newSymbol);
   // screenerEngine and botPool/tradingBot are global — intentionally not restarted
 }
+
+// ─── Soft reset — clears all engine state, preserves auth + open trades ─────
+// Stops/restarts crawlers, sentiment, ICT engine, and screener.
+// BotPool and TradingBot are intentionally left running so open positions and
+// API credentials survive the reset.
+async function softReset(): Promise<void> {
+  for (const crawler of crawlers) crawler.disconnect();
+  sentimentAggregator.stop();
+  ictEngine.stop();
+  screenerEngine.stop();
+
+  await new Promise<void>((r) => setTimeout(r, 300));
+
+  for (const crawler of crawlers) {
+    crawler.connect(currentSymbol).catch((err: Error) => {
+      console.error(`[${crawler.exchange}] reset reconnect error:`, err.message);
+    });
+  }
+  sentimentAggregator.start(currentSymbol);
+  ictEngine.start(currentSymbol);
+  screenerEngine.start();
+}
+
+// ─── Memory watchdog — polls every 30s, triggers soft reset at limit ─────────
+setInterval(() => {
+  const mb = Math.round(process.memoryUsage().rss / 1_048_576);
+  if (mb >= MEM_LIMIT_MB) {
+    softReset().catch((err: Error) => console.error("[memory] reset error:", err.message));
+  }
+}, 30_000);
 
 // ─── Render UI ─────────────────────────────────────────────────────────────
 const { unmount } = render(
@@ -106,6 +139,7 @@ const { unmount } = render(
     tradingBot,
     symbol,
     onSymbolChange: changeSymbol,
+    memLimitMB: MEM_LIMIT_MB,
   }),
   { exitOnCtrlC: false }
 );

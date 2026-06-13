@@ -207,11 +207,15 @@ function ActiveSetupsSection({ setups, symbol }: { setups: ICTSetup[]; symbol: s
 // ── Open positions ────────────────────────────────────────────────────────────
 
 function PositionRow({ trade }: { trade: TradeRecord }) {
-  const dc    = trade.direction === "bull" ? "green" : "red";
-  const label = trade.direction === "bull" ? "LONG " : "SHORT";
-  const pnl   = fmtPnl(trade.unrealizedPnl ?? trade.realizedPnl ?? 0);
-  const risk  = Math.abs(trade.entryPrice - trade.stopLoss);
-  const rr    = risk > 0 ? `${(Math.abs(trade.takeProfit - trade.entryPrice) / risk).toFixed(1)}x` : "—";
+  const dc       = trade.direction === "bull" ? "green" : "red";
+  const label    = trade.direction === "bull" ? "LONG " : "SHORT";
+  const pnl      = fmtPnl(trade.unrealizedPnl ?? trade.realizedPnl ?? 0);
+  const risk     = Math.abs(trade.entryPrice - trade.stopLoss);
+  const rr       = risk > 0 ? `${(Math.abs(trade.takeProfit - trade.entryPrice) / risk).toFixed(1)}x` : "—";
+  const notional = trade.entryPrice * trade.qty;
+  const margin   = trade.leverage && trade.leverage > 0
+    ? `$${(notional / trade.leverage).toFixed(2)}`
+    : null;
 
   return (
     <Box flexDirection="column" marginLeft={1} marginBottom={1}>
@@ -224,6 +228,11 @@ function PositionRow({ trade }: { trade: TradeRecord }) {
         <Text color="gray">SL</Text><Text color="red">{fmtPrice(trade.stopLoss)}</Text>
         <Text color="gray">TP</Text><Text color="green">{fmtPrice(trade.takeProfit)}</Text>
         <Text color="gray">qty</Text><Text color="white">{trade.qty}</Text>
+        {trade.leverage && <><Text color="gray">lev</Text><Text color="white">{trade.leverage}x</Text></>}
+        {margin && <><Text color="gray">margin</Text><Text color="yellow">{margin}</Text></>}
+        {trade.riskPctUsed !== undefined && (
+          <><Text color="gray">risk</Text><Text color="gray" dimColor>{(trade.riskPctUsed * 100).toFixed(1)}%</Text></>
+        )}
         <Text color="gray">RR</Text><Text color="white">{rr}</Text>
         <Text color={pnl.color} bold>{pnl.text}</Text>
         <Text color="gray" dimColor>{fmtAge(trade.openedAt)} ago</Text>

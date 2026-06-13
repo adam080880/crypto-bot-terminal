@@ -122,6 +122,7 @@ export class TradingBot extends EventEmitter {
         setupId:      "__imported__",
         setupType:    "imported",
         confidence:   0,
+        leverage:     parseFloat(pos.leverage),
       });
     }
   }
@@ -364,6 +365,8 @@ export class TradingBot extends EventEmitter {
       setupId: setup.id,
       setupType: setup.type,
       confidence: setup.confidence,
+      leverage: maxLev,
+      riskPctUsed: riskPct,
       entryOrderId: entryOrder.orderId,
       slOrderId,
       tpOrderId,

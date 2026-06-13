@@ -59,6 +59,8 @@ export interface TradeRecord {
   setupId: string;
   setupType: string;
   confidence: number;
+  leverage?: number;
+  riskPctUsed?: number;
   entryOrderId?: number;
   slOrderId?: number;
   tpOrderId?: number;
