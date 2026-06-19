@@ -1,4 +1,4 @@
-import type { Candle, Direction, Timeframe, SetupType, POI } from "./types.ts";
+import type { Candle, Direction, Timeframe, SetupType, TradeCategory, POI } from "./types.ts";
 import { findSwings, detectStructure } from "./structure.ts";
 import { findOrderBlocks } from "./orderBlock.ts";
 import { findFVGs, findIFVGs } from "./fvg.ts";
@@ -17,6 +17,14 @@ import type { ICTSetup } from "./types.ts";
 
 export type BacktestGrade = "S" | "A" | "B" | "C" | "D";
 
+export interface SetupStats {
+  trades: number;
+  wins: number;
+  winRate: number;
+  avgRR: number;
+  netPnlR: number;
+}
+
 export interface BacktestTrade {
   type: SetupType;
   direction: Direction;
@@ -27,6 +35,7 @@ export interface BacktestTrade {
   confidence: number;
   outcome: "win" | "loss";
   pnlR: number;
+  tradeCategory?: TradeCategory;
 }
 
 export interface BacktestResult {
@@ -45,6 +54,8 @@ export interface BacktestResult {
   rankLabel: string;
   testedAt: number;
   candlesAnalyzed: number;
+  byType: Partial<Record<SetupType, SetupStats>>;
+  byCategory: Partial<Record<TradeCategory, SetupStats>>;
 }
 
 const BASE_TF: Timeframe = "15m";
@@ -99,6 +110,7 @@ export function runBacktest(
         confidence: setup.confidence,
         outcome,
         pnlR: outcome === "win" ? setup.rr : -1,
+        tradeCategory: setup.tradeCategory,
       });
     }
   }
@@ -211,6 +223,7 @@ function buildResult(
       netPnlR: 0, maxDrawdownR: 0, bestWinStreak: 0, worstLossStreak: 0,
       avgWinRR: 0, avgConfidence: 0, grade: "D", rankLabel: RANK_LABELS.D,
       testedAt: Date.now(), candlesAnalyzed,
+      byType: {}, byCategory: {},
     };
   }
 
@@ -242,10 +255,35 @@ function buildResult(
   else if (winRate >= 0.50 && avgWinRR >= 1.5)                  grade = "B";
   else if (winRate >= 0.45 && avgWinRR >= 1.2)                  grade = "C";
 
+  const byType: Partial<Record<SetupType, SetupStats>> = {};
+  for (const t of ["CB1", "CB2", "CR"] as SetupType[]) {
+    const sub = trades.filter((x) => x.type === t);
+    if (!sub.length) continue;
+    const w = sub.filter((x) => x.outcome === "win").length;
+    byType[t] = {
+      trades: sub.length, wins: w, winRate: w / sub.length,
+      avgRR: w ? sub.filter((x) => x.outcome === "win").reduce((s, x) => s + x.rr, 0) / w : 0,
+      netPnlR: sub.reduce((s, x) => s + x.pnlR, 0),
+    };
+  }
+
+  const byCategory: Partial<Record<TradeCategory, SetupStats>> = {};
+  for (const c of ["swing", "intraday", "scalp"] as TradeCategory[]) {
+    const sub = trades.filter((x) => x.tradeCategory === c);
+    if (!sub.length) continue;
+    const w = sub.filter((x) => x.outcome === "win").length;
+    byCategory[c] = {
+      trades: sub.length, wins: w, winRate: w / sub.length,
+      avgRR: w ? sub.filter((x) => x.outcome === "win").reduce((s, x) => s + x.rr, 0) / w : 0,
+      netPnlR: sub.reduce((s, x) => s + x.pnlR, 0),
+    };
+  }
+
   return {
     symbol, totalTrades: trades.length, wins, losses, winRate,
     netPnlR, maxDrawdownR, bestWinStreak, worstLossStreak,
     avgWinRR, avgConfidence, grade, rankLabel: RANK_LABELS[grade],
     testedAt: Date.now(), candlesAnalyzed,
+    byType, byCategory,
   };
 }

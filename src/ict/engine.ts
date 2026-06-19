@@ -13,6 +13,7 @@ import { detectSetups } from "./setupDetector.ts";
 import { obToPOI, fvgToPOI, ifvgToPOI, oclToPOI, srFlipToPOI, qmToPOI, detectPOIResponse, buildPOIStacks, markFVGBacking, TF_ORDER } from "./poi.ts";
 import { findSRFlips } from "./rbs.ts";
 import { findQuasimodo } from "./quasimodo.ts";
+import { calcPriceLevels } from "./levels.ts";
 
 const ALL_TFS: readonly Timeframe[] = TF_ORDER;
 
@@ -24,7 +25,9 @@ const TF_LIMITS: Record<Timeframe, number> = {
 
 export declare interface ICTEngine {
   on(event: "update", listener: () => void): this;
+  on(event: "setup-active", listener: (setup: ICTSetup) => void): this;
   emit(event: "update"): boolean;
+  emit(event: "setup-active", setup: ICTSetup): boolean;
 }
 
 export class ICTEngine extends EventEmitter {
@@ -32,6 +35,7 @@ export class ICTEngine extends EventEmitter {
   private activeSetups = new Map<string, ICTSetup>();
   private symbol = "";
   private snapshot: ICTSnapshot;
+  private prevSetupStatuses = new Map<string, string>();
 
   // Tiered cache
   private poiCache = new Map<Timeframe, POI[]>();
@@ -78,6 +82,7 @@ export class ICTEngine extends EventEmitter {
     this.activeSetups.clear();
     this.poiCache.clear();
     this.atrEntry = 0;
+    this.prevSetupStatuses.clear();
 
     Promise.all(
       ALL_TFS.map((tf) => this.fetchers[tf].start(symbol).catch(() => {})),
@@ -112,6 +117,7 @@ export class ICTEngine extends EventEmitter {
       pois: [],
       structureEvents: [],
       setups: [],
+      priceLevels: [],
       updatedAt: 0,
     };
   }
@@ -212,6 +218,10 @@ export class ICTEngine extends EventEmitter {
     const phase = detectPhase(htfC, htfSwings, htfTrend);
     const killzone = getKillZone();
 
+    // Compute price levels (PDH/PDL/PDO/PWH/PWL/PWO)
+    const weeklyC = this.fetchers["1w"].getCandles();
+    const priceLevels = calcPriceLevels(htfC, weeklyC);
+
     // Flatten all cached POIs
     const allPOIs: POI[] = [];
     for (const pois of this.poiCache.values()) allPOIs.push(...pois);
@@ -236,6 +246,7 @@ export class ICTEngine extends EventEmitter {
       structureEvents: allEvents,
       price,
       atr,
+      priceLevels,
     });
 
     // Type quality rank — used to upgrade a stale lower-quality entry for the same stack
@@ -283,6 +294,20 @@ export class ICTEngine extends EventEmitter {
       if (stopped) this.activeSetups.set(id, { ...setup, status: "invalid" });
     }
 
+    // Emit alert when a setup transitions watching → active/triggered
+    for (const [id, setup] of this.activeSetups) {
+      const prev = this.prevSetupStatuses.get(id);
+      if (prev === "watching" && (setup.status === "active" || setup.status === "triggered")) {
+        this.emit("setup-active", setup);
+      }
+      this.prevSetupStatuses.set(id, setup.status);
+    }
+
+    // Cleanup prevSetupStatuses for setups that no longer exist
+    for (const id of this.prevSetupStatuses.keys()) {
+      if (!this.activeSetups.has(id)) this.prevSetupStatuses.delete(id);
+    }
+
     // Prune old inactive
     const inactive = [...this.activeSetups.values()]
       .filter((s) => s.status !== "active" && s.status !== "triggered" && s.status !== "watching")
@@ -326,6 +351,7 @@ export class ICTEngine extends EventEmitter {
       pois: displayPOIs,
       structureEvents: allEvents,
       setups: visibleSetups,
+      priceLevels,
       updatedAt: Date.now(),
     };
   }

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
+import { spawn as spawnProc } from "node:child_process";
 import { useApp, useStdout, Box } from "ink";
 import type { Aggregator, AggregatedBook as AggBook } from "../orderbook/aggregator.ts";
 import type { SentimentAggregator } from "../sentiment/aggregator.ts";
@@ -65,16 +66,22 @@ export function App({ aggregator, sentimentAggregator, ictEngine, screenerEngine
   const [memUsedMB, setMemUsedMB] = useState(() => Math.round(process.memoryUsage().rss / 1_048_576));
   const [scanScroll, setScanScroll]   = useState(0);
   const [scanTypeFilter, setScanTypeFilter] = useState<Set<SetupType>>(new Set(["CB1", "CB2", "CR"]));
+  const [scanStaleFilter, setScanStaleFilter] = useState(false);
+  const [scanStatusFilter, setScanStatusFilter] = useState<Set<"active" | "watching">>(new Set(["active", "watching"]));
   const [ictScroll,  setIctScroll]  = useState(0);
   const [sentScroll, setSentScroll] = useState(0);
   const [botScroll,  setBotScroll]  = useState(0);
   const scanScrollRef      = useRef(scanScroll);
   const scanTypeFilterRef  = useRef(scanTypeFilter);
-  const ictScrollRef       = useRef(ictScroll);
+  const scanStaleFilterRef   = useRef(scanStaleFilter);
+  const scanStatusFilterRef  = useRef(scanStatusFilter);
+  const ictScrollRef         = useRef(ictScroll);
   const sentScrollRef = useRef(sentScroll);
   const botScrollRef  = useRef(botScroll);
-  useEffect(() => { scanScrollRef.current     = scanScroll;      }, [scanScroll]);
-  useEffect(() => { scanTypeFilterRef.current = scanTypeFilter;  }, [scanTypeFilter]);
+  useEffect(() => { scanScrollRef.current      = scanScroll;      }, [scanScroll]);
+  useEffect(() => { scanTypeFilterRef.current  = scanTypeFilter;  }, [scanTypeFilter]);
+  useEffect(() => { scanStaleFilterRef.current   = scanStaleFilter;   }, [scanStaleFilter]);
+  useEffect(() => { scanStatusFilterRef.current  = scanStatusFilter;  }, [scanStatusFilter]);
   useEffect(() => { ictScrollRef.current  = ictScroll;  }, [ictScroll]);
   useEffect(() => { sentScrollRef.current = sentScroll; }, [sentScroll]);
   useEffect(() => { botScrollRef.current  = botScroll;  }, [botScroll]);
@@ -115,6 +122,20 @@ export function App({ aggregator, sentimentAggregator, ictEngine, screenerEngine
     ictEngine.on("update", handler);
     return () => { ictEngine.off("update", handler); };
   }, [ictEngine, midPrice]);
+
+  // Setup-active alert: terminal bell + macOS notification
+  useEffect(() => {
+    const handler = (setup: import("../ict/types.ts").ICTSetup) => {
+      process.stdout.write("");
+      if (process.platform === "darwin") {
+        spawnProc("osascript", ["-e",
+          `display notification "${setup.type} ${setup.direction.toUpperCase()} setup active" with title "ICT Terminal" sound name "Glass"`,
+        ]);
+      }
+    };
+    ictEngine.on("setup-active", handler);
+    return () => { ictEngine.off("setup-active", handler); };
+  }, [ictEngine]);
 
   useEffect(() => {
     const handler = () => setScreener(screenerEngine.get());
@@ -240,6 +261,26 @@ export function App({ aggregator, sentimentAggregator, ictEngine, screenerEngine
         return;
       }
 
+      // Screener status filter — a=active, w=watching
+      if (activeViewRef.current === "scan" && (str === "a" || str === "w")) {
+        const toggle = str === "a" ? "active" : "watching";
+        setScanStatusFilter((prev) => {
+          const next = new Set(prev) as Set<"active" | "watching">;
+          if (next.has(toggle)) next.delete(toggle); else next.add(toggle);
+          if (next.size === 0) return new Set(["active", "watching"]);
+          return next;
+        });
+        setScanScroll(0);
+        return;
+      }
+
+      // Screener stale filter — s = toggle hide setups > 4h
+      if (activeViewRef.current === "scan" && str === "s") {
+        setScanStaleFilter((prev) => !prev);
+        setScanScroll(0);
+        return;
+      }
+
       // Order book controls
       if (activeViewRef.current === "book") {
         if (str === "+" || str === "=") setDepth((d) => Math.min(d + 5, 50));
@@ -292,7 +333,7 @@ export function App({ aggregator, sentimentAggregator, ictEngine, screenerEngine
       )}
       {activeView === "sentiment" && <SentimentView snapshot={sentiment} scrollTop={sentScroll} terminalRows={rows} />}
       {activeView === "ict"       && <ICTView snapshot={ict} scrollTop={ictScroll} terminalRows={rows} backtestRunning={backtestRunning} backtestResult={backtestResult} />}
-      {activeView === "scan"      && <ScreenerView snapshot={screener} scrollTop={scanScroll} terminalRows={rows} setScanScroll={setScanScroll} typeFilter={scanTypeFilter} />}
+      {activeView === "scan"      && <ScreenerView snapshot={screener} scrollTop={scanScroll} terminalRows={rows} setScanScroll={setScanScroll} typeFilter={scanTypeFilter} statusFilter={scanStatusFilter} staleFilter={scanStaleFilter} />}
       {activeView === "bot"       && <BotView snapshot={botSnap} ict={ict} scrollTop={botScroll} terminalRows={rows} />}
     </Box>
   );

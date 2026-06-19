@@ -1,7 +1,7 @@
 import type {
   Candle, POI, POIStack, SwingPoint, StructureEvent,
   PremiumDiscount, KillZoneStatus, ICTSetup, Direction,
-  Trend, SetupType, Timeframe, TradeCategory, LiquidityGrade,
+  Trend, SetupType, Timeframe, TradeCategory, LiquidityGrade, PriceLevel,
 } from "./types.ts";
 import { isEntryPOIKind } from "./poi.ts";
 
@@ -18,6 +18,7 @@ export interface DetectContext {
   structureEvents: StructureEvent[];
   price: number;
   atr: number;
+  priceLevels?: readonly PriceLevel[];
 }
 
 export function detectSetups(ctx: DetectContext): ICTSetup[] {
@@ -97,13 +98,13 @@ export function detectSetups(ctx: DetectContext): ICTSetup[] {
     const risk = Math.abs(execEntry - stop);
     if (risk <= 0) continue;
 
-    const target = findTarget(direction, ctx.price, ctx.allPOIs, ctx.htfSwings, ctx.atr, execEntry, stop);
+    const target = findTarget(direction, ctx.price, ctx.allPOIs, ctx.htfSwings, ctx.atr, execEntry, stop, ctx.priceLevels);
     if (target === null) continue;
 
     const rr = Math.abs(target - execEntry) / risk;
 
     const setupType = classifySetup(stack, ctx, validPOI, mssPOI);
-    const { confidence, reasons } = score({ stack, ctx, rr, atZone, validPOI, mssPOI, execPOI });
+    const { confidence, reasons } = score({ stack, ctx, rr, atZone, validPOI, mssPOI, execPOI, target, priceLevels: ctx.priceLevels });
     // Watching setups use a lower confidence threshold
     if (atZone && confidence < 50) continue;
     if (!atZone && confidence < 40) continue;
@@ -277,6 +278,7 @@ function findTarget(
   atr: number,
   entry: number,
   stop: number,
+  priceLevels?: readonly PriceLevel[],
 ): number | null {
   const oppDir: Direction = direction === "bull" ? "bear" : "bull";
   const risk = Math.abs(entry - stop);
@@ -292,8 +294,26 @@ function findTarget(
     .filter((p) => direction === "bull" ? p.bottom > minTarget : p.top < minTarget)
     .sort((a, b) => direction === "bull" ? a.bottom - b.bottom : b.top - a.top);
 
+  // Price level candidates: PDH/PWH for bull BSL, PDL/PWL for bear SSL
+  const levelCandidates = (priceLevels ?? [])
+    .filter((l) =>
+      direction === "bull"
+        ? (l.kind === "PDH" || l.kind === "PWH") && l.price > minTarget
+        : (l.kind === "PDL" || l.kind === "PWL") && l.price < minTarget,
+    )
+    .sort((a, b) => direction === "bull" ? a.price - b.price : b.price - a.price);
+
+  const allCandidatePrices: number[] = [];
   const poi = opposing.at(0);
-  if (poi) return direction === "bull" ? poi.bottom : poi.top;
+  if (poi) allCandidatePrices.push(direction === "bull" ? poi.bottom : poi.top);
+  const lvl = levelCandidates.at(0);
+  if (lvl) allCandidatePrices.push(lvl.price);
+
+  if (allCandidatePrices.length > 0) {
+    return direction === "bull"
+      ? Math.min(...allCandidatePrices)
+      : Math.max(...allCandidatePrices);
+  }
 
   // Fallback: HTF swing that also satisfies the minimum distance
   if (direction === "bull") {
@@ -322,8 +342,10 @@ function score(input: {
   validPOI?: POI;
   mssPOI?: POI;
   execPOI?: POI;
+  target?: number;
+  priceLevels?: readonly PriceLevel[];
 }): { confidence: number; reasons: string[] } {
-  const { stack, ctx, rr, atZone, validPOI, mssPOI, execPOI } = input;
+  const { stack, ctx, rr, atZone, validPOI, mssPOI, execPOI, target, priceLevels } = input;
   const dir = stack.direction;
   let pts = 0;
   const reasons: string[] = [];
@@ -427,6 +449,13 @@ function score(input: {
 
   if (ctx.killzone.active) { pts += 8; reasons.push(ctx.killzone.active.toUpperCase() + " KZ"); }
   if (rr >= 2) { pts += 5; reasons.push(`RR${rr.toFixed(1)}`); }
+
+  const atKeyLevel = (priceLevels ?? []).some((l) =>
+    target !== undefined &&
+    Math.abs(l.price - target) <= ctx.atr * 0.5 &&
+    (dir === "bull" ? (l.kind === "PDH" || l.kind === "PWH") : (l.kind === "PDL" || l.kind === "PWL"))
+  );
+  if (atKeyLevel) { pts += 10; reasons.push("draws to key level"); }
 
   // Slight penalty for setups not at zone (not yet actionable)
   if (!atZone) pts = Math.round(pts * 0.85);

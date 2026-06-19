@@ -1,7 +1,7 @@
 import React from "react";
 import { Box, Text } from "ink";
-import type { ICTSnapshot, ICTSetup, POI, StructureEvent } from "../ict/types.ts";
-import type { BacktestResult, BacktestGrade } from "../ict/backtest.ts";
+import type { ICTSnapshot, ICTSetup, POI, StructureEvent, PriceLevel } from "../ict/types.ts";
+import type { BacktestResult, BacktestGrade, SetupStats } from "../ict/backtest.ts";
 import { TF_ORDER } from "../ict/poi.ts";
 
 interface Props {
@@ -100,6 +100,31 @@ function BiasBar({ s }: { s: ICTSnapshot }) {
   );
 }
 
+// ── Price levels bar ─────────────────────────────────────────────────────────
+
+function PriceLevelsBar({ levels, price }: { levels: PriceLevel[]; price: number }) {
+  if (levels.length === 0) return null;
+  // Only show levels within 10% of price to avoid clutter
+  const nearby = levels.filter((l) => Math.abs(l.price - price) / price < 0.10);
+  if (nearby.length === 0) return null;
+  const sorted = [...nearby].sort((a, b) => b.price - a.price);
+  return (
+    <Box gap={2} marginBottom={1} flexWrap="wrap">
+      <Text color="gray">KEY:</Text>
+      {sorted.map((l) => {
+        const dist = (l.price - price) / price;
+        const c = Math.abs(dist) < 0.005 ? "yellow" : dist > 0 ? "red" : "green";
+        return (
+          <Box key={l.kind} gap={1}>
+            <Text color="gray" dimColor>{l.kind}</Text>
+            <Text color={c} bold>{fmt(l.price)}</Text>
+          </Box>
+        );
+      })}
+    </Box>
+  );
+}
+
 // ── Inline row renderers (no wrapper margins) ─────────────────────────────────
 
 function PoiItem({ p }: { p: POI }) {
@@ -185,6 +210,22 @@ const GRADE_COLOR: Record<BacktestGrade, string> = {
   S: "yellow", A: "green", B: "cyan", C: "yellowBright", D: "red",
 };
 
+function StatsRow({ label, s, labelColor }: { label: string; s: SetupStats; labelColor?: string }) {
+  const pnlColor = s.netPnlR >= 0 ? "green" : "red";
+  const pnlStr = (s.netPnlR >= 0 ? "+" : "") + s.netPnlR.toFixed(1) + "R";
+  return (
+    <Box gap={2}>
+      <Text color={labelColor ?? "cyan"} bold>{label.padEnd(7)}</Text>
+      <Text color="gray">{String(s.trades).padStart(3)}t</Text>
+      <Text color={s.winRate >= 0.55 ? "green" : s.winRate >= 0.45 ? "yellow" : "red"}>
+        {Math.round(s.winRate * 100).toString().padStart(2)}%
+      </Text>
+      <Text color="white">{s.avgRR.toFixed(1)}×</Text>
+      <Text color={pnlColor}>{pnlStr}</Text>
+    </Box>
+  );
+}
+
 function BacktestPanel({ result }: { result: BacktestResult }) {
   const gc = GRADE_COLOR[result.grade];
   const wrPct = Math.round(result.winRate * 100);
@@ -192,6 +233,10 @@ function BacktestPanel({ result }: { result: BacktestResult }) {
   const bar = "█".repeat(filled) + "░".repeat(18 - filled);
   const pnlSign = result.netPnlR >= 0 ? "+" : "";
   const pnlColor = result.netPnlR >= 0 ? "green" : "red";
+
+  const typeEntries = (["CB1", "CB2", "CR"] as const).map((t) => [t, result.byType[t]] as const).filter(([, s]) => s);
+  const catEntries  = (["swing", "intraday", "scalp"] as const).map((c) => [c, result.byCategory[c]] as const).filter(([, s]) => s);
+
   return (
     <Box flexDirection="column" marginTop={1} paddingX={1} borderStyle="single" borderColor="gray">
       <Box gap={2}>
@@ -213,6 +258,18 @@ function BacktestPanel({ result }: { result: BacktestResult }) {
         <Box gap={1}><Text color="gray">Streak</Text><Text color="green">{result.bestWinStreak}W</Text><Text color="gray">/</Text><Text color="red">{result.worstLossStreak}L worst</Text></Box>
         <Box gap={1}><Text color="gray">Avg Conf</Text><Text color="yellow">{result.avgConfidence.toFixed(0)}</Text></Box>
       </Box>
+      {typeEntries.length > 0 && (
+        <Box flexDirection="column" marginTop={1} gap={0}>
+          <Text color="gray" dimColor>by type  · T  WR   AvgRR  PnL</Text>
+          {typeEntries.map(([t, s]) => <StatsRow key={t} label={t} s={s!} labelColor="cyan" />)}
+        </Box>
+      )}
+      {catEntries.length > 0 && (
+        <Box flexDirection="column" marginTop={1} gap={0}>
+          <Text color="gray" dimColor>by cat   · T  WR   AvgRR  PnL</Text>
+          {catEntries.map(([c, s]) => <StatsRow key={c} label={c} s={s!} labelColor="magentaBright" />)}
+        </Box>
+      )}
     </Box>
   );
 }
@@ -283,7 +340,10 @@ function buildRows(
       h: 2,
     });
   } else if (backtestResult) {
-    rows.push({ key: "bt-panel", node: <BacktestPanel result={backtestResult} />, h: 6 });
+    const typeCount = Object.keys(backtestResult.byType).length;
+    const catCount  = Object.keys(backtestResult.byCategory).length;
+    const h = 6 + (typeCount > 0 ? typeCount + 2 : 0) + (catCount > 0 ? catCount + 2 : 0);
+    rows.push({ key: "bt-panel", node: <BacktestPanel result={backtestResult} />, h });
   }
 
   return rows;
@@ -319,6 +379,7 @@ export function ICTView({
   return (
     <Box flexDirection="column" paddingX={1} marginY={1}>
       <BiasBar s={snapshot} />
+      <PriceLevelsBar levels={snapshot.priceLevels ?? []} price={snapshot.price} />
       {hasAbove && (
         <Text color="gray" dimColor>  ▲ {clamped} more above (↑/pgup)</Text>
       )}

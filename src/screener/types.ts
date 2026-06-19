@@ -7,6 +7,9 @@ export interface ScreenerResult {
   setups: ICTSetup[];
   scannedAt: number;
   error?: string;
+  backtestGrade?: import("../ict/backtest.ts").BacktestGrade;
+  backtestWinRate?: number;
+  backtestTrades?: number;
 }
 
 export interface ScreenerSnapshot {

@@ -9,6 +9,13 @@ export type POIKind = "OB" | "FVG" | "RBS" | "SBR" | "QM" | "OCL" | "iFVG";
 export type POIResponse = "none" | "touching" | "reacting";
 export type TradeCategory = "swing" | "intraday" | "scalp";
 export type LiquidityGrade = "A" | "B" | "C";
+export type PriceLevelKind = "PDH" | "PDL" | "PDO" | "PWH" | "PWL" | "PWO";
+
+export interface PriceLevel {
+  kind: PriceLevelKind;
+  price: number;
+  time: number;
+}
 
 export interface Candle {
   openTime: number;
@@ -163,5 +170,6 @@ export interface ICTSnapshot {
   pois: POI[];
   structureEvents: StructureEvent[];
   setups: ICTSetup[];
+  priceLevels: PriceLevel[];
   updatedAt: number;
 }

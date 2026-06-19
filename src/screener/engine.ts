@@ -13,6 +13,7 @@ import { obToPOI, fvgToPOI, ifvgToPOI, oclToPOI, srFlipToPOI, qmToPOI, buildPOIS
 import { detectSetups } from "../ict/setupDetector.ts";
 import { getKillZone } from "../ict/killzone.ts";
 import { fetchAllCryptoPerps, DEFAULT_SYMBOLS } from "./symbols.ts";
+import { runBacktest } from "../ict/backtest.ts";
 
 const BATCH_SIZE = 5;
 const BATCH_DELAY_MS = 1200; // 5 symbols × 4 klines × weight 2 = 40 weight/batch → ~2000 weight/min (safe under 2400 limit)
@@ -37,7 +38,7 @@ async function fetchKlines(symbol: string, interval: Timeframe, limit: number): 
     close:    parseFloat(r[4]),
     volume:   parseFloat(r[5]),
     closeTime: r[6],
-    closed: true,
+    closed: r[6] < Date.now(),
   }));
 }
 
@@ -207,6 +208,19 @@ export class ScreenerEngine extends EventEmitter {
       atr,
     });
 
-    return { symbol, price, htfTrend, setups, scannedAt: Date.now() };
+    const candleMap = new Map<Timeframe, Candle[]>([
+      ["1d",  c1d],
+      ["4h",  c4h],
+      ["1h",  c1h],
+      ["15m", c15m],
+    ]);
+    const btResult = runBacktest(candleMap, symbol);
+
+    return {
+      symbol, price, htfTrend, setups, scannedAt: Date.now(),
+      backtestGrade:   btResult?.grade,
+      backtestWinRate: btResult?.winRate,
+      backtestTrades:  btResult?.totalTrades,
+    };
   }
 }
