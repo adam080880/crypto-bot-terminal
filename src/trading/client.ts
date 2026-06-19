@@ -18,7 +18,7 @@ export class BinanceFuturesClient {
 
   private sign(params: Record<string, string | number | boolean>): string {
     const qs = new URLSearchParams(
-      Object.entries(params).map(([k, v]) => [k, String(v)])
+      Object.entries(params).map(([k, v]) => [k, String(v)] as [string, string])
     ).toString();
     const sig = createHmac("sha256", this.apiSecret).update(qs).digest("hex");
     return `${qs}&signature=${sig}`;
