@@ -3,7 +3,7 @@ import type { KillZoneName, KillZoneStatus } from "./types.ts";
 const ZONES: Record<KillZoneName, [number, number]> = {
   asia:    [0, 4],
   london:  [7, 10],
-  newyork: [12, 15],
+  newyork: [13, 16],
 };
 
 const ORDER: KillZoneName[] = ["asia", "london", "newyork"];

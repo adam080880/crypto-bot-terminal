@@ -1,13 +1,14 @@
 import React from "react";
 import { Box, Text } from "ink";
 import type { ScreenerSnapshot, ScreenerResult } from "../screener/types.ts";
-import type { ICTSetup } from "../ict/types.ts";
+import type { ICTSetup, SetupType } from "../ict/types.ts";
 
 interface Props {
   snapshot: ScreenerSnapshot;
   scrollTop: number;
   terminalRows: number;
   setScanScroll: (fn: (s: number) => number) => void;
+  typeFilter: Set<SetupType>;
 }
 
 function fmt(n: number): string {
@@ -21,6 +22,9 @@ function dirColor(d: string) { return d === "bull" ? "green" : "red"; }
 function confColor(c: number)  {
   return c >= 80 ? "green" : c >= 65 ? "greenBright" : c >= 50 ? "yellow" : "gray";
 }
+function catLabel(c?: string) { return c === "swing" ? "S" : c === "intraday" ? "I" : "D"; }
+function catColor(c?: string) { return c === "swing" ? "magentaBright" : c === "intraday" ? "cyan" : "gray"; }
+function gradeColor(g?: string) { return g === "A" ? "green" : g === "B" ? "yellow" : "gray"; }
 
 function ConfBar({ c }: { c: number }) {
   const filled = Math.round((c / 100) * 7);
@@ -57,6 +61,8 @@ function SetupRow({ row }: { row: RowData }) {
       </Text>
       <Text color={dc}>{arr}</Text>
       <Text color={isAt ? "white" : "gray"}>{setup.type}</Text>
+      <Text color={catColor(setup.tradeCategory)} bold>{catLabel(setup.tradeCategory)}</Text>
+      <Text color={gradeColor(setup.liquidityGrade)} bold>{setup.liquidityGrade ?? "·"}</Text>
       <ConfBar c={setup.confidence} />
       <Text color="cyan">{chainLabel(setup).padEnd(9)}</Text>
       <Text color="gray">E</Text>
@@ -82,7 +88,7 @@ function ScanProgress({ done, total }: { done: number; total: number }) {
 // Lines consumed by header, meta row, col-headers, separator, margins, and app Header
 const OVERHEAD = 9;
 
-export function ScreenerView({ snapshot, scrollTop, terminalRows, setScanScroll }: Props) {
+export function ScreenerView({ snapshot, scrollTop, terminalRows, setScanScroll, typeFilter }: Props) {
   const { results, scanning, lastScanAt, progress } = snapshot;
 
   const lastStr = lastScanAt > 0
@@ -93,8 +99,9 @@ export function ScreenerView({ snapshot, scrollTop, terminalRows, setScanScroll 
   const noSetup:  ScreenerResult[] = [];
 
   for (const r of results) {
-    if (r.setups.length === 0) { noSetup.push(r); continue; }
-    for (const s of r.setups) {
+    const matching = r.setups.filter((s) => typeFilter.has(s.type));
+    if (matching.length === 0) { noSetup.push(r); continue; }
+    for (const s of matching) {
       const row: RowData = { symbol: r.symbol, price: r.price, setup: s };
       if (s.status === "active" || s.status === "triggered") active.push(row);
       else watching.push(row);
@@ -147,6 +154,14 @@ export function ScreenerView({ snapshot, scrollTop, terminalRows, setScanScroll 
           </Text>
         )}
         {errorCount > 0 && <Text color="red"> {errorCount} err</Text>}
+        {/* Type filter toggles */}
+        <Box gap={1}>
+          {(["CB1", "CB2", "CR"] as SetupType[]).map((t, i) => (
+            <Text key={t} color={typeFilter.has(t) ? "white" : "gray"} bold={typeFilter.has(t)} dimColor={!typeFilter.has(t)}>
+              {i + 1}:{t}
+            </Text>
+          ))}
+        </Box>
       </Box>
 
       {/* Scroll indicator — above */}
@@ -162,7 +177,7 @@ export function ScreenerView({ snapshot, scrollTop, terminalRows, setScanScroll 
           {[0, 1].map((col) => (
             <Box key={col} flexGrow={1} gap={1}>
               <Text color="gray">{"Sym".padEnd(7)}</Text>
-              <Text color="gray">{"D Typ"}</Text>
+              <Text color="gray">{"D Typ C Lq"}</Text>
               <Text color="gray">{"Conf".padEnd(12)}</Text>
               <Text color="gray">{"Chain".padEnd(10)}</Text>
               <Text color="gray">{"Entry".padStart(10)}</Text>

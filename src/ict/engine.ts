@@ -1,23 +1,24 @@
 import { EventEmitter } from "events";
-import type { ICTSnapshot, ICTSetup, Timeframe, POI } from "./types.ts";
+import type { ICTSnapshot, ICTSetup, Timeframe, POI, Candle } from "./types.ts";
 import { CandleFetcher } from "./candleFetcher.ts";
 import { findSwings, detectStructure } from "./structure.ts";
 import { findOrderBlocks } from "./orderBlock.ts";
-import { findFVGs } from "./fvg.ts";
+import { findFVGs, findIFVGs } from "./fvg.ts";
+import { findOCLs } from "./ocl.ts";
 import { calcPremiumDiscount } from "./premiumDiscount.ts";
 import { detectPhase } from "./marketPhase.ts";
 import { getKillZone } from "./killzone.ts";
 import { calcATR } from "./atr.ts";
 import { detectSetups } from "./setupDetector.ts";
-import { obToPOI, fvgToPOI, srFlipToPOI, qmToPOI, detectPOIResponse, buildPOIStacks, TF_ORDER } from "./poi.ts";
+import { obToPOI, fvgToPOI, ifvgToPOI, oclToPOI, srFlipToPOI, qmToPOI, detectPOIResponse, buildPOIStacks, markFVGBacking, TF_ORDER } from "./poi.ts";
 import { findSRFlips } from "./rbs.ts";
 import { findQuasimodo } from "./quasimodo.ts";
 
 const ALL_TFS: readonly Timeframe[] = TF_ORDER;
 
 const TF_LIMITS: Record<Timeframe, number> = {
-  "1M": 60, "1w": 120, "1d": 200,
-  "4h": 180, "1h": 300,
+  "1M": 60, "1w": 120, "1d": 500,
+  "4h": 500, "1h": 500,
   "15m": 500, "5m": 400, "1m": 300,
 };
 
@@ -93,6 +94,12 @@ export class ICTEngine extends EventEmitter {
 
   get(): ICTSnapshot { return this.snapshot; }
 
+  getAllCandles(): Map<Timeframe, Candle[]> {
+    const map = new Map<Timeframe, Candle[]>();
+    for (const tf of ALL_TFS) map.set(tf, [...this.fetchers[tf].getCandles()]);
+    return map;
+  }
+
   private emptySnapshot(): ICTSnapshot {
     return {
       symbol: "",
@@ -116,13 +123,17 @@ export class ICTEngine extends EventEmitter {
 
     const obs = findOrderBlocks(candles, tf);
     const fvgs = findFVGs(candles, tf);
+    const ifvgs = findIFVGs(candles, tf);
+    const ocls = findOCLs(candles, tf);
     const srFlips = findSRFlips(candles, tf);
-    // QM only on entry timeframes (LTF confirmation signal)
-    const qms = (tf === "1m" || tf === "5m" || tf === "15m" || tf === "1h")
+    // QM on entry + intermediate timeframes
+    const qms = (tf === "1m" || tf === "5m" || tf === "15m" || tf === "1h" || tf === "4h")
       ? findQuasimodo(candles, tf) : [];
     const fresh: POI[] = [
       ...obs.map(obToPOI),
       ...fvgs.map(fvgToPOI),
+      ...ifvgs.map(ifvgToPOI),
+      ...ocls.map(oclToPOI),
       ...srFlips.map(srFlipToPOI),
       ...qms.map(qmToPOI),
     ];
@@ -184,7 +195,7 @@ export class ICTEngine extends EventEmitter {
 
     // HTF structure from 1d
     const htfSwings = findSwings(htfC, 2);
-    const { trend: htfTrend } = detectStructure(htfC, htfSwings);
+    const { trend: htfTrend, events: htfEvents } = detectStructure(htfC, htfSwings);
 
     // Mid structure from 4h
     const midSwings = findSwings(midC, 2);
@@ -194,9 +205,8 @@ export class ICTEngine extends EventEmitter {
     const entrySwings = findSwings(entryC, 2);
     const { events: entryEvents } = detectStructure(entryC, entrySwings);
 
-    const allEvents = [...midEvents, ...entryEvents]
-      .sort((a, b) => b.time - a.time)
-      .slice(0, 8);
+    const allEvents = [...htfEvents, ...midEvents, ...entryEvents]
+      .sort((a, b) => b.time - a.time);
 
     const pd = calcPremiumDiscount(htfSwings, price);
     const phase = detectPhase(htfC, htfSwings, htfTrend);
@@ -205,6 +215,9 @@ export class ICTEngine extends EventEmitter {
     // Flatten all cached POIs
     const allPOIs: POI[] = [];
     for (const pois of this.poiCache.values()) allPOIs.push(...pois);
+
+    // Flag entry POIs backed by a nearby same-TF FVG (Materi 2: higher probability)
+    markFVGBacking(allPOIs, atr);
 
     // Build POI stacks — wide buffer (20 ATR) to capture approaching setups too
     const stacks = buildPOIStacks(allPOIs, price, atr, 20);
@@ -225,9 +238,21 @@ export class ICTEngine extends EventEmitter {
       atr,
     });
 
-    // Merge new setups (don't overwrite existing active ones with same id)
+    // Type quality rank — used to upgrade a stale lower-quality entry for the same stack
+    const TYPE_RANK: Record<string, number> = { CB1: 1, CB2: 2, CR: 3 };
+
     for (const s of newSetups) {
-      if (!this.activeSetups.has(s.id)) this.activeSetups.set(s.id, s);
+      if (this.activeSetups.has(s.id)) continue; // same id already tracked
+
+      // If the same stack already has a lower-quality type entry, replace it so we
+      // don't accumulate duplicate "CB1-stackX" + "CB2-stackX" for the same zone.
+      const stale = [...this.activeSetups.values()].find(
+        (e) => e.poiStack.id === s.poiStack.id
+          && (TYPE_RANK[s.type] ?? 0) > (TYPE_RANK[e.type] ?? 0),
+      );
+      if (stale) this.activeSetups.delete(stale.id);
+
+      this.activeSetups.set(s.id, s);
     }
 
     // Reconcile status
@@ -246,7 +271,12 @@ export class ICTEngine extends EventEmitter {
       if (Date.now() - setup.createdAt > 12 * 15 * 60_000) {
         this.activeSetups.set(id, { ...setup, status: "expired" }); continue;
       }
-      if (price >= setup.zoneBottom && price <= setup.zoneTop) {
+      // Require a closed candle inside the zone — live wick alone is not enough.
+      const closedInZone = this.fetchers["1m"].getCandles()
+        .filter((c) => c.closed)
+        .slice(-3)
+        .some((c) => c.close >= setup.zoneBottom && c.close <= setup.zoneTop);
+      if (closedInZone) {
         this.activeSetups.set(id, { ...setup, status: "triggered" }); continue;
       }
       const stopped = setup.direction === "bull" ? price < setup.stop : price > setup.stop;

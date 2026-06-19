@@ -58,7 +58,8 @@ export async function fetchAllCryptoPerps(): Promise<string[]> {
     return tickers
       .filter((t) => allowed.has(t.symbol))
       .sort((a, b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume))
-      .map((t) => t.symbol);
+      .map((t) => t.symbol)
+      .slice(0, 40); // top 40 by 24h quote volume — keeps scan cycle fast & under rate limits
   } catch {
     return [...DEFAULT_SYMBOLS];
   }

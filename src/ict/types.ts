@@ -5,8 +5,10 @@ export type Trend = "bullish" | "bearish" | "ranging";
 export type MarketPhase = "accumulation" | "markup" | "distribution" | "markdown";
 export type SetupType = "CB1" | "CB2" | "CR";
 export type KillZoneName = "asia" | "london" | "newyork";
-export type POIKind = "OB" | "FVG" | "RBS" | "SBR" | "QM";
+export type POIKind = "OB" | "FVG" | "RBS" | "SBR" | "QM" | "OCL" | "iFVG";
 export type POIResponse = "none" | "touching" | "reacting";
+export type TradeCategory = "swing" | "intraday" | "scalp";
+export type LiquidityGrade = "A" | "B" | "C";
 
 export interface Candle {
   openTime: number;
@@ -42,7 +44,7 @@ export interface OrderBlock {
   time: number;
   mitigated: boolean;
   timeframe: Timeframe;
-  wickStop: number;  // c3.low (bull) or c3.high (bear) — SL level
+  wickStop: number;  // Math.min(c2.low, c3.low) bull / Math.max(c2.high, c3.high) bear — SL below/above zone
 }
 
 export interface FVG {
@@ -52,6 +54,30 @@ export interface FVG {
   time: number;
   filled: boolean;
   timeframe: Timeframe;
+}
+
+// Inverse FVG — an FVG that price closed through and flipped polarity.
+// A bull FVG broken downward → bear iFVG (now resistance).
+// A bear FVG broken upward   → bull iFVG (now support).
+// Unlike a plain FVG, an iFVG IS a valid standalone entry POI.
+export interface IFVG extends FVG {
+  inverted: boolean; // always true for emitted iFVGs — flags the polarity flip
+  invertTime: number; // candle time at which the inversion (break-through close) occurred
+}
+
+// Open/Close Candle level — the open or close of the candle right before a
+// displacement move. "OCL Break" = once that level is closed back through, the
+// broken level becomes a higher-probability POI.
+export interface OCL {
+  direction: Direction; // bull = support level, bear = resistance level
+  level: number;        // the open/close price that acts as the POI
+  top: number;          // level + buffer
+  bottom: number;       // level - buffer
+  time: number;         // candle time the level formed
+  timeframe: Timeframe;
+  broken: boolean;      // true once a later candle closed back through the level
+  breakTime?: number;   // candle time the break occurred
+  mitigated: boolean;   // true once price traded back into the zone after the move
 }
 
 // Unified Point of Interest — output of the POI layer
@@ -71,6 +97,7 @@ export interface POI {
   wickStop?: number;   // OB only: wick of c3 used as SL
   touchCount?: number; // RBS/SBR: how many times level was tested before flipping
   m2Price?: number;    // QM only: M2 extreme (SL level — above for bear, below for bull)
+  hasFVG?: boolean;    // OB/RBS/SBR/OCL/iFVG: a supporting FVG sits near this zone (higher prob)
 }
 
 // Nested POI alignment across timeframe groups
@@ -119,6 +146,10 @@ export interface ICTSetup {
   createdAt: number;
   status: "watching" | "active" | "triggered" | "invalid" | "expired";
   poiStack: POIStack;
+  tradeCategory?: TradeCategory;
+  liquidityScore?: number;
+  liquidityGrade?: LiquidityGrade;
+  liquidityReasons?: string[];
 }
 
 export interface ICTSnapshot {

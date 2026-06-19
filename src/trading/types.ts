@@ -40,13 +40,13 @@ export interface SymbolFilters {
   minNotional: number;
 }
 
-export type TradeStatus = "open" | "closed" | "stopped" | "failed";
+export type TradeStatus = "pending" | "open" | "closed" | "stopped" | "failed" | "cancelled";
 
 export interface TradeRecord {
   id: string;
   symbol: string;
   direction: "bull" | "bear";
-  entryPrice: number;
+  entryPrice: number;    // limit price while pending; actual fill price once open
   qty: number;
   stopLoss: number;
   takeProfit: number;
@@ -61,12 +61,14 @@ export interface TradeRecord {
   confidence: number;
   leverage?: number;
   riskPctUsed?: number;
+  limitOrderId?: number; // pending limit entry order
   entryOrderId?: number;
   slOrderId?: number;
   tpOrderId?: number;
   slIsAlgo?: boolean;
   tpIsAlgo?: boolean;
   error?: string;
+  riskPerUnit?: number; // abs(entry - stop) per unit — used for anomaly/profit-protect exits
   reasons?: string[];
   poiStack?: string;   // compact label e.g. "1d OB → 4h FVG → 15m RBS"
 }

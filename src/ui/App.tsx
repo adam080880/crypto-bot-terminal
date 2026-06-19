@@ -7,8 +7,11 @@ import type { ICTEngine } from "../ict/engine.ts";
 import type { ICTSnapshot } from "../ict/types.ts";
 import type { ScreenerEngine } from "../screener/engine.ts";
 import type { ScreenerSnapshot } from "../screener/types.ts";
+import type { SetupType } from "../ict/types.ts";
 import type { TradingBot } from "../trading/bot.ts";
 import type { BotSnapshot } from "../trading/types.ts";
+import { runBacktest } from "../ict/backtest.ts";
+import type { BacktestResult } from "../ict/backtest.ts";
 import { Header } from "./Header.tsx";
 import { AggregatedBook } from "./AggregatedBook.tsx";
 import { SentimentView } from "./SentimentView.tsx";
@@ -60,9 +63,26 @@ export function App({ aggregator, sentimentAggregator, ictEngine, screenerEngine
   const [lastUpdate, setLastUpdate] = useState(new Date());
   const [midPrice, setMidPrice] = useState<number | undefined>(undefined);
   const [memUsedMB, setMemUsedMB] = useState(() => Math.round(process.memoryUsage().rss / 1_048_576));
-  const [scanScroll, setScanScroll] = useState(0);
-  const scanScrollRef = useRef(scanScroll);
-  useEffect(() => { scanScrollRef.current = scanScroll; }, [scanScroll]);
+  const [scanScroll, setScanScroll]   = useState(0);
+  const [scanTypeFilter, setScanTypeFilter] = useState<Set<SetupType>>(new Set(["CB1", "CB2", "CR"]));
+  const [ictScroll,  setIctScroll]  = useState(0);
+  const [sentScroll, setSentScroll] = useState(0);
+  const [botScroll,  setBotScroll]  = useState(0);
+  const scanScrollRef      = useRef(scanScroll);
+  const scanTypeFilterRef  = useRef(scanTypeFilter);
+  const ictScrollRef       = useRef(ictScroll);
+  const sentScrollRef = useRef(sentScroll);
+  const botScrollRef  = useRef(botScroll);
+  useEffect(() => { scanScrollRef.current     = scanScroll;      }, [scanScroll]);
+  useEffect(() => { scanTypeFilterRef.current = scanTypeFilter;  }, [scanTypeFilter]);
+  useEffect(() => { ictScrollRef.current  = ictScroll;  }, [ictScroll]);
+  useEffect(() => { sentScrollRef.current = sentScroll; }, [sentScroll]);
+  useEffect(() => { botScrollRef.current  = botScroll;  }, [botScroll]);
+  const [backtestResult, setBacktestResult] = useState<BacktestResult | null>(null);
+  const [backtestRunning, setBacktestRunning] = useState(false);
+  const backtestRunningRef = useRef(false);
+  const currentSymbolRef = useRef(currentSymbol);
+  useEffect(() => { currentSymbolRef.current = currentSymbol; }, [currentSymbol]);
 
   useEffect(() => {
     const handler = () => {
@@ -112,6 +132,7 @@ export function App({ aggregator, sentimentAggregator, ictEngine, screenerEngine
   useEffect(() => {
     setMidPrice(undefined);
     setIct(ictEngine.get());
+    setIctScroll(0);
   }, [currentSymbol, ictEngine]);
 
   useEffect(() => {
@@ -188,6 +209,37 @@ export function App({ aggregator, sentimentAggregator, ictEngine, screenerEngine
         return;
       }
 
+      // Backtest (ICT view only)
+      if (activeViewRef.current === "ict" && str === "b") {
+        if (!backtestRunningRef.current) {
+          backtestRunningRef.current = true;
+          setBacktestRunning(true);
+          setBacktestResult(null);
+          setTimeout(() => {
+            const result = runBacktest(ictEngine.getAllCandles(), currentSymbolRef.current);
+            setBacktestResult(result);
+            setBacktestRunning(false);
+            backtestRunningRef.current = false;
+          }, 50);
+        }
+        return;
+      }
+
+      // Screener type filter toggles — 1=CB1, 2=CB2, 3=CR
+      if (activeViewRef.current === "scan" && (str === "1" || str === "2" || str === "3")) {
+        const typeMap: Record<string, SetupType> = { "1": "CB1", "2": "CB2", "3": "CR" };
+        const toggle = typeMap[str]!;
+        setScanTypeFilter((prev) => {
+          const next = new Set(prev);
+          if (next.has(toggle)) next.delete(toggle); else next.add(toggle);
+          // Never allow empty filter — if last one toggled off, restore all
+          if (next.size === 0) return new Set(["CB1", "CB2", "CR"]);
+          return next;
+        });
+        setScanScroll(0); // reset scroll when filter changes
+        return;
+      }
+
       // Order book controls
       if (activeViewRef.current === "book") {
         if (str === "+" || str === "=") setDepth((d) => Math.min(d + 5, 50));
@@ -196,13 +248,17 @@ export function App({ aggregator, sentimentAggregator, ictEngine, screenerEngine
         if (str === "[")                 setTickIdx((i) => Math.max(i - 1, 0));
       }
 
-      // Scan scroll
-      if (activeViewRef.current === "scan") {
-        if (key?.name === "up")       setScanScroll((s) => Math.max(0, s - 1));
-        if (key?.name === "down")     setScanScroll((s) => s + 1);
-        if (key?.name === "pageup")   setScanScroll((s) => Math.max(0, s - 10));
-        if (key?.name === "pagedown") setScanScroll((s) => s + 10);
-        if (key?.name === "home")     setScanScroll(0);
+      // Generic scroll — all views except book
+      const scrollMap: Partial<Record<ActiveView, (fn: (s: number) => number) => void>> = {
+        ict: setIctScroll, sentiment: setSentScroll, scan: setScanScroll, bot: setBotScroll,
+      };
+      const scroller = scrollMap[activeViewRef.current];
+      if (scroller) {
+        if (key?.name === "up")       scroller((s) => Math.max(0, s - 1));
+        if (key?.name === "down")     scroller((s) => s + 1);
+        if (key?.name === "pageup")   scroller((s) => Math.max(0, s - 10));
+        if (key?.name === "pagedown") scroller((s) => s + 10);
+        if (key?.name === "home")     scroller(() => 0);
       }
     };
 
@@ -234,10 +290,10 @@ export function App({ aggregator, sentimentAggregator, ictEngine, screenerEngine
           <StatusBar depth={depth} tickSize={tickSize} memUsedMB={memUsedMB} memLimitMB={memLimitMB} />
         </>
       )}
-      {activeView === "sentiment" && <SentimentView snapshot={sentiment} />}
-      {activeView === "ict"       && <ICTView snapshot={ict} />}
-      {activeView === "scan"      && <ScreenerView snapshot={screener} scrollTop={scanScroll} terminalRows={rows} setScanScroll={setScanScroll} />}
-      {activeView === "bot"       && <BotView snapshot={botSnap} ict={ict} />}
+      {activeView === "sentiment" && <SentimentView snapshot={sentiment} scrollTop={sentScroll} terminalRows={rows} />}
+      {activeView === "ict"       && <ICTView snapshot={ict} scrollTop={ictScroll} terminalRows={rows} backtestRunning={backtestRunning} backtestResult={backtestResult} />}
+      {activeView === "scan"      && <ScreenerView snapshot={screener} scrollTop={scanScroll} terminalRows={rows} setScanScroll={setScanScroll} typeFilter={scanTypeFilter} />}
+      {activeView === "bot"       && <BotView snapshot={botSnap} ict={ict} scrollTop={botScroll} terminalRows={rows} />}
     </Box>
   );
 }

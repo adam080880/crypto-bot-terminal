@@ -1,3 +1,6 @@
+import dns from "node:dns";
+dns.setServers(["1.1.1.1", "8.8.8.8", "1.0.0.1"]);
+
 import React from "react";
 import { render } from "ink";
 import { emitKeypressEvents } from "readline";
@@ -21,6 +24,13 @@ import { App } from "./ui/App.tsx";
 const args = process.argv.slice(2);
 const noBot = args.includes("--no-bot");
 const symbol = args.find((a) => !a.startsWith("-")) ?? "BTCUSDT";
+
+// --only BTCUSDT  or  --only BTCUSDT,ETHUSDT  — whitelist symbols the bot will trade
+const onlyIdx = args.indexOf("--only");
+const onlyArg = onlyIdx !== -1 ? args[onlyIdx + 1] : undefined;
+const onlySymbols = onlyArg
+  ? new Set(onlyArg.toUpperCase().split(",").map((s) => s.trim()).filter(Boolean))
+  : undefined;
 
 const MEM_LIMIT_MB = 10_240; // 10 GB — soft reset triggers when RSS exceeds this
 let currentSymbol = symbol;
@@ -62,7 +72,7 @@ if (!noBot) {
   process.stdout.write("\n");
 
   botPool    = new BotPool(screenerEngine, symbol);
-  tradingBot = new TradingBot(botPool, client, botConfig);
+  tradingBot = new TradingBot(botPool, client, { ...botConfig, onlySymbols });
 }
 
 // ─── Keyboard input setup ────────────────────────────────────────────────────

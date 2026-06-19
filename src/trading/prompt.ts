@@ -54,17 +54,24 @@ export async function promptBotConfig(): Promise<{
   highRiskPct: number;
   maxOpenTrades: number;
   minConfidence: number;
+  minLiquidityScore: number;
+  requireCB2orCR: boolean;
+  minRR: number;
 }> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
 
   console.log("Bot configuration (press Enter to use defaults):");
   console.log("  Leverage is set to max automatically per symbol (up to x100).");
+  console.log("  Dynamic exits: anomaly spike (1.5× risk/60s) + profit protect (0.7× risk retreat).");
   console.log("");
 
   const riskStr   = await question(rl, "  Risk normal setup     [1%]: ");
   const hiRiskStr = await question(rl, "  Risk high-conf (≥60%) [5%]: ");
   const maxStr    = await question(rl, "  Max open trades        [3]: ");
   const confStr   = await question(rl, "  Min ICT confidence    [60]: ");
+  const liqStr    = await question(rl, "  Min liquidity score [45/B]: ");
+  const cb2Str    = await question(rl, "  Require CB2/CR only?  [y]: ");
+  const rrStr     = await question(rl, "  Min R:R ratio        [2.0]: ");
 
   rl.close();
 
@@ -80,10 +87,17 @@ export async function promptBotConfig(): Promise<{
     [riskPct, highRiskPct] = [highRiskPct, riskPct];
   }
 
+  const minLiquidityScore = liqStr ? parseInt(liqStr) : 45;
+  const requireCB2orCR    = cb2Str ? cb2Str.trim().toLowerCase() !== "n" : true;
+  const minRR             = rrStr  ? parseFloat(rrStr) : 2.0;
+
   return {
     riskPct,
     highRiskPct,
-    maxOpenTrades: maxStr  ? parseInt(maxStr)  : 3,
+    maxOpenTrades: maxStr ? parseInt(maxStr) : 3,
     minConfidence: confStr ? parseInt(confStr) : 60,
+    minLiquidityScore,
+    requireCB2orCR,
+    minRR,
   };
 }

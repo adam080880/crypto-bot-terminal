@@ -108,6 +108,25 @@ export class BinanceFuturesClient {
     });
   }
 
+  async placeLimitOrder(
+    symbol: string,
+    side: "BUY" | "SELL",
+    qty: number,
+    price: number,
+  ): Promise<BinanceOrder> {
+    const filters  = await this.getSymbolFilters(symbol);
+    const qtyStr   = roundStep(qty, filters.stepSize);
+    const priceStr = roundStep(price, filters.tickSize);
+    return this.request<BinanceOrder>("POST", "/fapi/v1/order", {
+      symbol,
+      side,
+      type: "LIMIT",
+      timeInForce: "GTC",
+      quantity: qtyStr,
+      price: priceStr,
+    });
+  }
+
   async placeStopLoss(
     symbol: string,
     side: "BUY" | "SELL",
@@ -176,6 +195,18 @@ export class BinanceFuturesClient {
       workingType: "MARK_PRICE",
     });
     return resp.algoId;
+  }
+
+  // Reduce-only market order — closes an open position immediately at market price.
+  async closePosition(symbol: string, side: "BUY" | "SELL", qty: number): Promise<BinanceOrder> {
+    const filters = await this.getSymbolFilters(symbol);
+    const qtyStr = roundStep(qty, filters.stepSize);
+    return this.request<BinanceOrder>("POST", "/fapi/v1/order", {
+      symbol, side,
+      type: "MARKET",
+      quantity: qtyStr,
+      reduceOnly: "true",
+    });
   }
 
   async cancelOrder(symbol: string, orderId: number): Promise<void> {

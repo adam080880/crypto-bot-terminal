@@ -1,6 +1,14 @@
-import type { POI, POIStack, POIResponse, Timeframe, TFGroup, OrderBlock, FVG, Candle } from "./types.ts";
+import type { POI, POIStack, POIResponse, Timeframe, TFGroup, OrderBlock, FVG, IFVG, OCL, Candle } from "./types.ts";
 import type { SRFlip } from "./rbs.ts";
 import type { QuasimodoPattern } from "./quasimodo.ts";
+
+// POI kinds that are valid standalone ENTRY zones (FVG is excluded — it is
+// supporting data only, never a standalone entry).
+export const ENTRY_POI_KINDS = ["OB", "iFVG", "RBS", "SBR", "OCL", "QM"] as const;
+
+export function isEntryPOIKind(kind: POI["kind"]): boolean {
+  return (ENTRY_POI_KINDS as readonly string[]).includes(kind);
+}
 
 export const TF_ORDER: readonly Timeframe[] =
   ["1m", "5m", "15m", "1h", "4h", "1d", "1w", "1M"] as const;
@@ -53,6 +61,41 @@ export function fvgToPOI(fvg: FVG): POI {
     mid: (fvg.top + fvg.bottom) / 2,
     time: fvg.time,
     consumed: fvg.filled,
+    response: "none",
+    touchedAt: null,
+  };
+}
+
+export function ifvgToPOI(ifvg: IFVG): POI {
+  return {
+    id: `iFVG-${ifvg.timeframe}-${ifvg.direction}-${ifvg.time}`,
+    kind: "iFVG",
+    direction: ifvg.direction,
+    timeframe: ifvg.timeframe,
+    group: tfGroup(ifvg.timeframe),
+    top: ifvg.top,
+    bottom: ifvg.bottom,
+    mid: (ifvg.top + ifvg.bottom) / 2,
+    time: ifvg.invertTime, // the POI becomes active at the inversion, not the original gap
+    consumed: ifvg.filled,
+    response: "none",
+    touchedAt: null,
+  };
+}
+
+export function oclToPOI(ocl: OCL): POI {
+  return {
+    id: `OCL-${ocl.timeframe}-${ocl.direction}-${ocl.time}`,
+    kind: "OCL",
+    direction: ocl.direction,
+    timeframe: ocl.timeframe,
+    group: tfGroup(ocl.timeframe),
+    top: ocl.top,
+    bottom: ocl.bottom,
+    mid: ocl.level,
+    // A broken OCL is the higher-prob variant — date it from the break.
+    time: ocl.broken && ocl.breakTime !== undefined ? ocl.breakTime : ocl.time,
+    consumed: ocl.mitigated,
     response: "none",
     touchedAt: null,
   };
@@ -126,11 +169,15 @@ export function detectPOIResponse(
     }
   }
 
-  // Price moved away from mid in the correct direction after touching
+  // Price moved away from mid in the correct direction after touching.
+  // Require the touch to have been recorded at least one 1m candle ago (60s) so a
+  // zone edge entry doesn't immediately read as "reacting" on the same tick that
+  // touchedAt was first set.
   const movedAway = poi.direction === "bull"
     ? price - poi.mid >= atr * 0.5
     : poi.mid - price >= atr * 0.5;
-  if (movedAway && poi.touchedAt !== null) return "reacting";
+  const touchConfirmed = poi.touchedAt !== null && Date.now() - poi.touchedAt >= 60_000;
+  if (movedAway && touchConfirmed) return "reacting";
 
   return "touching";
 }
@@ -143,6 +190,30 @@ function zonesOverlap(a: POI, b: POI): boolean {
 
 function withinBuf(poi: POI, price: number, buf: number): boolean {
   return price >= poi.bottom - buf && price <= poi.top + buf;
+}
+
+/**
+ * Mark entry-type POIs (OB/RBS/SBR/OCL/iFVG) that have a same-direction FVG
+ * sitting within 0.5 ATR. Per Materi 2, an FVG is the "foundation" of an OB —
+ * an entry POI backed by an FVG is higher probability. Mutates `hasFVG` in place
+ * and returns the same array for chaining.
+ */
+export function markFVGBacking(allPOIs: POI[], atr: number): POI[] {
+  if (atr <= 0) return allPOIs;
+  const fvgs = allPOIs.filter((p) => p.kind === "FVG");
+  const tol = atr * 0.5;
+  for (const poi of allPOIs) {
+    if (poi.kind === "FVG") continue;
+    if (!isEntryPOIKind(poi.kind)) continue;
+    const backed = fvgs.some(
+      (f) =>
+        f.direction === poi.direction &&
+        f.timeframe === poi.timeframe &&
+        Math.abs(f.mid - poi.mid) <= tol,
+    );
+    if (backed) poi.hasFVG = true;
+  }
+  return allPOIs;
 }
 
 /**
@@ -245,17 +316,18 @@ export function buildPOIStacks(
 ): POIStack[] {
   if (atr <= 0) return [];
 
-  // OB-only cascade: FVGs create too much noise as setup triggers.
-  // FVGs remain in allPOIs for display/target-finding but not for chains.
-  const obs = allPOIs.filter((p) => p.kind === "OB");
+  // Entry-POI cascade: OB, iFVG, RBS, SBR, OCL, QM are valid standalone zones.
+  // Plain FVG is excluded — it creates noise and per Materi 2 is supporting data
+  // only. FVGs remain in allPOIs for display/target-finding & FVG-backing.
+  const cascadePool = allPOIs.filter((p) => isEntryPOIKind(p.kind));
 
-  const macros = obs.filter(
+  const macros = cascadePool.filter(
     (p) => !p.consumed && p.group === "macro" && withinBuf(p, price, atr * 10),
   );
-  const intermediates = obs.filter(
+  const intermediates = cascadePool.filter(
     (p) => !p.consumed && p.group === "intermediate" && withinBuf(p, price, atr * 5),
   );
-  const entries = obs.filter(
+  const entries = cascadePool.filter(
     (p) => !p.consumed && p.group === "entry" && withinBuf(p, price, atr * entryBufMult),
   );
 

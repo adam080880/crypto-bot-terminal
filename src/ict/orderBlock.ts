@@ -44,7 +44,9 @@ export function findOrderBlocks(
           time: c2.openTime,
           mitigated: isMitigated("bull", c2.open, c2.close, closed, i + 1),
           timeframe: tf,
-          wickStop: c3.low, // SL = lowest wick of c3 (impulse candle)
+          // SL below the OB zone — take the lowest low of c2 and c3 so gaps don't
+          // land the stop inside or above the entry zone.
+          wickStop: Math.min(c2.low, c3.low),
         });
       }
     }
@@ -69,7 +71,9 @@ export function findOrderBlocks(
           time: c2.openTime,
           mitigated: isMitigated("bear", c2.close, c2.open, closed, i + 1),
           timeframe: tf,
-          wickStop: c3.high, // SL = highest wick of c3
+          // SL above the OB zone — take the highest high of c2 and c3 so gaps don't
+          // land the stop inside or below the entry zone.
+          wickStop: Math.max(c2.high, c3.high),
         });
       }
     }

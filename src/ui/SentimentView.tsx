@@ -4,17 +4,34 @@ import type { SentimentSnapshot, NewsItem, FundingEntry, LongShortEntry } from "
 
 interface Props {
   snapshot: SentimentSnapshot;
+  scrollTop: number;
+  terminalRows: number;
 }
+
+// ── VRow scroll utility ───────────────────────────────────────────────────────
+
+type VRow = { key: string; node: React.ReactNode; h: number };
+
+function vslice(rows: VRow[], top: number, avail: number): VRow[] {
+  const out: VRow[] = []; let cur = 0;
+  for (const r of rows) {
+    if (cur + r.h <= top) { cur += r.h; continue; }
+    if (cur >= top + avail) break;
+    out.push(r); cur += r.h;
+  }
+  return out;
+}
+
+function vtotal(rows: VRow[]): number { return rows.reduce((s, r) => s + r.h, 0); }
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 const BAR = 24;
 
 function scoreBar(score: number): string {
-  // score: -1 to +1, center at BAR/2
   const center = Math.floor(BAR / 2);
   const filled = Math.round(Math.abs(score) * center);
-  if (score >= 0) {
-    return " ".repeat(center) + "█".repeat(filled).padEnd(center);
-  }
+  if (score >= 0) return " ".repeat(center) + "█".repeat(filled).padEnd(center);
   return "█".repeat(filled).padStart(center) + " ".repeat(center);
 }
 
@@ -62,7 +79,9 @@ function timeAgo(date: Date): string {
   return `${hrs}h ago`;
 }
 
-function FearGreedSection({ fg }: { fg: SentimentSnapshot["fearGreed"] }) {
+// ── Section renderers → used as VRow nodes ────────────────────────────────────
+
+function FearGreedRow({ fg }: { fg: SentimentSnapshot["fearGreed"] }) {
   if (!fg) return (
     <Box flexDirection="column" marginBottom={1}>
       <Text color="gray" bold>Fear & Greed</Text>
@@ -84,7 +103,7 @@ function FearGreedSection({ fg }: { fg: SentimentSnapshot["fearGreed"] }) {
   );
 }
 
-function FundingSection({ funding, longShort }: { funding: FundingEntry[]; longShort: LongShortEntry[] }) {
+function FundingRow({ funding, longShort }: { funding: FundingEntry[]; longShort: LongShortEntry[] }) {
   return (
     <Box flexDirection="column" marginBottom={1}>
       <Text color="gray" bold>Funding Rate</Text>
@@ -126,37 +145,22 @@ function FundingSection({ funding, longShort }: { funding: FundingEntry[]; longS
   );
 }
 
-function NewsSection({ news }: { news: NewsItem[] }) {
+function NewsItem({ item, i }: { item: NewsItem; i: number }) {
+  const color = scoreColor(item.score);
+  const arrow = scoreArrow(item.score);
+  const title = item.title.length > 60 ? item.title.slice(0, 57) + "..." : item.title;
   return (
-    <Box flexDirection="column" marginBottom={1}>
-      <Box gap={1}>
-        <Text color="gray" bold>News</Text>
-        <Text color="gray" dimColor>
-          {news[0]?.scoredBy === "llm" ? "(LLM scored)" : "(keyword scored)"}
-        </Text>
-      </Box>
-      {news.length === 0
-        ? <Text color="gray">  loading...</Text>
-        : news.map((item, i) => {
-            const color = scoreColor(item.score);
-            const arrow = scoreArrow(item.score);
-            const title = item.title.length > 60 ? item.title.slice(0, 57) + "..." : item.title;
-            return (
-              <Box key={i} gap={1}>
-                <Text>  </Text>
-                <Text color={color}>{arrow}</Text>
-                <Text color={color}>{fmtScore(item.score)}</Text>
-                <Text color={color === "yellow" ? "white" : color}>{title.padEnd(62)}</Text>
-                <Text color="gray">{timeAgo(item.publishedAt)}</Text>
-              </Box>
-            );
-          })
-      }
+    <Box gap={1}>
+      <Text>  </Text>
+      <Text color={color}>{arrow}</Text>
+      <Text color={color}>{fmtScore(item.score)}</Text>
+      <Text color={color === "yellow" ? "white" : color}>{title.padEnd(62)}</Text>
+      <Text color="gray">{timeAgo(item.publishedAt)}</Text>
     </Box>
   );
 }
 
-function OverallSection({ score }: { score: number }) {
+function OverallRow({ score }: { score: number }) {
   const color = scoreColor(score);
   const label = score > 0.3 ? "BULLISH" : score > 0.05 ? "SLIGHTLY BULLISH" : score < -0.3 ? "BEARISH" : score < -0.05 ? "SLIGHTLY BEARISH" : "NEUTRAL";
   return (
@@ -169,13 +173,71 @@ function OverallSection({ score }: { score: number }) {
   );
 }
 
-export function SentimentView({ snapshot }: Props) {
+// ── Build rows ────────────────────────────────────────────────────────────────
+
+function buildRows(snapshot: SentimentSnapshot): VRow[] {
+  const rows: VRow[] = [];
+  const { fearGreed, funding, longShort, news, overallScore } = snapshot;
+
+  // Fear & Greed: header + content + marginBottom = 3 lines
+  rows.push({ key: "fg", node: <FearGreedRow fg={fearGreed} />, h: 3 });
+
+  // Funding + L/S: header + funding row + (optional LS header + LS row) + marginBottom
+  const lsH = longShort.length > 0 ? 2 : 0; // "Long / Short" header + row
+  rows.push({ key: "funding", node: <FundingRow funding={funding} longShort={longShort} />, h: 2 + lsH + 1 });
+
+  // News header
+  rows.push({
+    key: "news-hdr",
+    node: (
+      <Box gap={1}>
+        <Text color="gray" bold>News</Text>
+        <Text color="gray" dimColor>{news[0]?.scoredBy === "llm" ? "(LLM scored)" : "(keyword scored)"}</Text>
+      </Box>
+    ),
+    h: 1,
+  });
+
+  if (news.length === 0) {
+    rows.push({ key: "news-empty", node: <Text color="gray">  loading...</Text>, h: 1 });
+  } else {
+    for (let i = 0; i < news.length; i++) {
+      rows.push({ key: `news-${i}`, node: <NewsItem item={news[i]!} i={i} />, h: 1 });
+    }
+  }
+
+  // Overall: marginTop + content = 2 lines
+  rows.push({ key: "overall", node: <OverallRow score={overallScore} />, h: 2 });
+
+  return rows;
+}
+
+// ── Main view ─────────────────────────────────────────────────────────────────
+
+// 1 (app header) + 1 (view top margin) + 1 (view bottom margin) = 3 lines overhead
+const OVERHEAD = 3;
+
+export function SentimentView({ snapshot, scrollTop, terminalRows }: Props) {
+  const rows   = buildRows(snapshot);
+  const avail  = Math.max(5, terminalRows - OVERHEAD);
+  const total  = vtotal(rows);
+  const clamped  = Math.max(0, Math.min(scrollTop, Math.max(0, total - avail)));
+  const visible  = vslice(rows, clamped, avail);
+  const hasAbove = clamped > 0;
+  const hasBelow = clamped + avail < total;
+
   return (
     <Box flexDirection="column" paddingX={1} marginY={1}>
-      <FearGreedSection fg={snapshot.fearGreed} />
-      <FundingSection funding={snapshot.funding} longShort={snapshot.longShort} />
-      <NewsSection news={snapshot.news} />
-      <OverallSection score={snapshot.overallScore} />
+      {hasAbove && (
+        <Text color="gray" dimColor>  ▲ {clamped} more above (↑/pgup)</Text>
+      )}
+      {visible.map((r) => <React.Fragment key={r.key}>{r.node}</React.Fragment>)}
+      {hasBelow && (
+        <Text color="gray" dimColor>  ▼ {total - clamped - avail} more below (↓/pgdn)</Text>
+      )}
+      {total > avail && (
+        <Text color="gray" dimColor>  ↑↓ pgup/pgdn scroll · line {clamped + 1}/{total}</Text>
+      )}
     </Box>
   );
 }

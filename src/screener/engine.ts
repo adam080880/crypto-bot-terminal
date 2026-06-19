@@ -2,11 +2,14 @@ import { EventEmitter } from "events";
 import type { Candle, Timeframe } from "../ict/types.ts";
 import type { ScreenerResult, ScreenerSnapshot } from "./types.ts";
 import { findOrderBlocks } from "../ict/orderBlock.ts";
-import { findFVGs } from "../ict/fvg.ts";
+import { findFVGs, findIFVGs } from "../ict/fvg.ts";
+import { findOCLs } from "../ict/ocl.ts";
+import { findSRFlips } from "../ict/rbs.ts";
+import { findQuasimodo } from "../ict/quasimodo.ts";
 import { findSwings, detectStructure } from "../ict/structure.ts";
 import { calcPremiumDiscount } from "../ict/premiumDiscount.ts";
 import { calcATR } from "../ict/atr.ts";
-import { obToPOI, fvgToPOI, buildPOIStacks } from "../ict/poi.ts";
+import { obToPOI, fvgToPOI, ifvgToPOI, oclToPOI, srFlipToPOI, qmToPOI, buildPOIStacks, markFVGBacking } from "../ict/poi.ts";
 import { detectSetups } from "../ict/setupDetector.ts";
 import { getKillZone } from "../ict/killzone.ts";
 import { fetchAllCryptoPerps, DEFAULT_SYMBOLS } from "./symbols.ts";
@@ -126,10 +129,10 @@ export class ScreenerEngine extends EventEmitter {
     let c1d: Candle[], c4h: Candle[], c1h: Candle[], c15m: Candle[];
     try {
       [c1d, c4h, c1h, c15m] = await Promise.all([
-        fetchKlines(symbol, "1d",  200),
-        fetchKlines(symbol, "4h",  200),
-        fetchKlines(symbol, "1h",  300),
-        fetchKlines(symbol, "15m", 400),
+        fetchKlines(symbol, "1d",  500),
+        fetchKlines(symbol, "4h",  500),
+        fetchKlines(symbol, "1h",  500),
+        fetchKlines(symbol, "15m", 500),
       ]);
     } catch (err) {
       return { symbol, price: 0, htfTrend: "ranging", setups: [], scannedAt: Date.now(), error: String(err) };
@@ -142,22 +145,49 @@ export class ScreenerEngine extends EventEmitter {
     if (!atr) return { symbol, price, htfTrend: "ranging", setups: [], scannedAt: Date.now() };
 
     const htfSwings = findSwings(c1d, 2);
-    const { trend: htfTrend } = detectStructure(c1d, htfSwings);
-    if (htfTrend === "ranging") return { symbol, price, htfTrend, setups: [], scannedAt: Date.now() };
+    const { trend: htfTrend, events: htfEvents } = detectStructure(c1d, htfSwings);
+    // NOTE: ranging symbols are NO LONGER skipped — they still produce setups
+    // (scored lower in detectSetups). This widens coverage for range-bound POIs.
 
     const midSwings  = findSwings(c4h,  2);
     const entrySwings = findSwings(c15m, 2);
+    const { events: midEvents }   = detectStructure(c4h,  midSwings);
+    const { events: entryEvents } = detectStructure(c15m, entrySwings);
 
-    // OBs for cascade (buildPOIStacks filters to OB-only internally)
-    // FVGs from HTFs included so findTarget can use them as profit targets
+    // Valid entry POIs (OB, iFVG, RBS, SBR, OCL, QM) across all TFs.
+    // Plain FVG is included only as supporting/target data (excluded from cascade
+    // inside buildPOIStacks); used for FVG-backing flags + profit-target finding.
     const allPOIs = [
+      // ── macro: 1d ──
       ...findOrderBlocks(c1d,  "1d" ).map(obToPOI),
+      ...findIFVGs(      c1d,  "1d" ).map(ifvgToPOI),
+      ...findOCLs(       c1d,  "1d" ).map(oclToPOI),
+      ...findSRFlips(    c1d,  "1d" ).map(srFlipToPOI),
+      ...findQuasimodo(  c1d,  "1d" ).map(qmToPOI),
       ...findFVGs(       c1d,  "1d" ).map(fvgToPOI),
+      // ── intermediate: 4h / 1h ──
       ...findOrderBlocks(c4h,  "4h" ).map(obToPOI),
+      ...findIFVGs(      c4h,  "4h" ).map(ifvgToPOI),
+      ...findOCLs(       c4h,  "4h" ).map(oclToPOI),
+      ...findSRFlips(    c4h,  "4h" ).map(srFlipToPOI),
+      ...findQuasimodo(  c4h,  "4h" ).map(qmToPOI),
       ...findFVGs(       c4h,  "4h" ).map(fvgToPOI),
       ...findOrderBlocks(c1h,  "1h" ).map(obToPOI),
+      ...findIFVGs(      c1h,  "1h" ).map(ifvgToPOI),
+      ...findOCLs(       c1h,  "1h" ).map(oclToPOI),
+      ...findSRFlips(    c1h,  "1h" ).map(srFlipToPOI),
+      ...findQuasimodo(  c1h,  "1h" ).map(qmToPOI),
+      ...findFVGs(       c1h,  "1h" ).map(fvgToPOI),
+      // ── entry: 15m ──
       ...findOrderBlocks(c15m, "15m").map(obToPOI),
+      ...findIFVGs(      c15m, "15m").map(ifvgToPOI),
+      ...findOCLs(       c15m, "15m").map(oclToPOI),
+      ...findQuasimodo(  c15m, "15m").map(qmToPOI),
+      ...findFVGs(       c15m, "15m").map(fvgToPOI),
     ];
+
+    // Flag entry POIs that sit near a same-TF FVG (higher probability per Materi 2)
+    markFVGBacking(allPOIs, atr);
 
     const pd     = calcPremiumDiscount(htfSwings, price);
     const stacks = buildPOIStacks(allPOIs, price, atr, 20);
@@ -172,7 +202,7 @@ export class ScreenerEngine extends EventEmitter {
       allPOIs,
       pd,
       killzone:       getKillZone(),
-      structureEvents: [],
+      structureEvents: [...htfEvents, ...midEvents, ...entryEvents],
       price,
       atr,
     });
